@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 
 import { ChatWidget } from "@/components/ChatWidget";
 import { Header } from "@/components/Header";
+import { GrainOverlay } from "@/components/shaders/GrainOverlay";
 import { Toaster } from "@/components/Toaster";
 
 export const metadata: Metadata = {
@@ -26,6 +27,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <main className="max-w-[1240px] mx-auto px-6 pt-8 pb-16">{children}</main>
         <ChatWidget />
         <Toaster />
+        {/* Site-wide grain shader — sits above everything at 3.5% opacity */}
+        <GrainOverlay opacity={0.035} />
       </body>
     </html>
   );
