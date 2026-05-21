@@ -1,0 +1,75 @@
+name: pricepulse
+
+services:
+  api:
+    build: .
+    env_file: .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build: .
+    env_file: .env
+    command: ["arq", "pricepulse.queue.tasks.WorkerSettings"]
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pricepulse}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-pricepulse}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7.4-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    ports:
+      - "6379:6379"
+
+  # Self-hosted Firecrawl powers the "non-formalized" 4th source.
+  # Full setup: https://github.com/firecrawl/firecrawl/blob/main/SELF_HOST.md
+  firecrawl-api:
+    image: firecrawl/firecrawl:latest
+    env_file: .env
+    environment:
+      USE_DB_AUTHENTICATION: "false"
+      REDIS_URL: redis://redis:6379
+      SEARXNG_ENDPOINT: http://searxng:8080
+    depends_on:
+      - redis
+      - searxng
+    ports:
+      - "3002:3002"
+
+  searxng:
+    image: searxng/searxng:latest
+    environment:
+      BASE_URL: http://localhost:8080
+      INSTANCE_NAME: pricepulse-searxng
+    ports:
+      - "8080:8080"
+
+volumes:
+  pgdata:

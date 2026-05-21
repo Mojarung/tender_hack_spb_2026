@@ -1,0 +1,98 @@
+[project]
+name = "pricepulse"
+version = "0.1.0"
+description = "Intelligent open-source price search service for the Moscow Suppliers Portal"
+readme = "README.md"
+requires-python = ">=3.13"
+license = { text = "MIT" }
+authors = [{ name = "PricePulse team" }]
+
+dependencies = [
+    # Web framework
+    "fastapi>=0.128",
+    "uvicorn[standard]>=0.34",
+    "sse-starlette>=2.1",
+    # Validation / settings
+    "pydantic>=2.10",
+    "pydantic-settings>=2.7",
+    # HTTP
+    "httpx[http2]>=0.28",
+    "tenacity>=9.0",
+    # Browser-based scraping (stealth)
+    "patchright>=1.50",
+    "camoufox[geoip]>=0.4",
+    # Search & extraction (4th, non-formalized source)
+    "firecrawl-py>=2.0",
+    # CAPTCHA solver (Yandex SmartCaptcha)
+    "twocaptcha-python>=1.4",
+    # Storage
+    "redis>=5.2",
+    "arq>=0.26",
+    "asyncpg>=0.30",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "alembic>=1.14",
+    # NLP / fuzzy
+    "pymorphy3>=2.0",
+    "rapidfuzz>=3.10",
+    "symspellpy>=6.7",
+    # Observability
+    "structlog>=24.4",
+    "orjson>=3.10",
+    "prometheus-client>=0.21",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "respx>=0.21",
+    "httpx>=0.28",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pricepulse"]
+
+[tool.uv]
+package = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",  # pyflakes / pycodestyle
+    "I",            # isort
+    "N",            # pep8-naming
+    "UP",           # pyupgrade
+    "B",            # bugbear
+    "ASYNC",        # async best practices
+    "S",            # bandit security
+    "C4",           # comprehensions
+    "RUF",          # ruff-specific
+]
+ignore = ["S101"]  # pytest uses assert
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "S311"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "live: tests that hit real external services (skipped by default)",
+]
+addopts = "-m 'not live'"
