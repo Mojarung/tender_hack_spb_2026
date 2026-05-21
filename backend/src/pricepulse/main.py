@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator, metrics
 
-from pricepulse.api.routes import admin, health, price_history, search, stream
+from pricepulse.api.routes import admin, health, price_history, search, sentiment, stream
 from pricepulse.config import get_settings
 from pricepulse.core.logging import configure_logging
 
@@ -52,6 +52,7 @@ def create_app() -> FastAPI:
     app.include_router(search.router, prefix="/api/v1")
     app.include_router(stream.router, prefix="/api/v1")
     app.include_router(price_history.router, prefix="/api/v1")
+    app.include_router(sentiment.router, prefix="/api/v1")
 
     _instrument(app)
     return app
