@@ -226,3 +226,6 @@ __marimo__/
 # Playwright MCP artifacts
 .playwright-mcp/
 frontend-home-*.png
+# Frontend lib/ is source code, not a Python venv
+!frontend/src/lib/
+!frontend/src/lib/**
