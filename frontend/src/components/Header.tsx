@@ -1,38 +1,123 @@
 "use client";
 
+import clsx from "clsx";
+import { AnimatePresence, motion } from "framer-motion";
+import { Clock, Heart, LogOut, Search, Trash2, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useState } from "react";
-import { motion } from "framer-motion";
-import { Heart, LogOut, Search, User as UserIcon } from "lucide-react";
+import { Suspense, useEffect, useRef, useState } from "react";
 
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-hook";
+import { history } from "@/lib/history";
+import { useHistory } from "@/lib/use-history";
+import { Logo } from "./Logo";
 
 function SearchBox() {
   const router = useRouter();
   const params = useSearchParams();
+  const items = useHistory();
   const [q, setQ] = useState(params.get("q") ?? "");
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => { setQ(params.get("q") ?? ""); }, [params]);
 
+  // Close dropdown when clicking outside.
+  useEffect(() => {
+    function onDoc(e: MouseEvent) {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, []);
+
+  function submit(value: string) {
+    const t = value.trim();
+    if (!t) return;
+    history.push(t);
+    setOpen(false);
+    router.push(`/search?q=${encodeURIComponent(t)}`);
+  }
+
   return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (!q.trim()) return;
-        router.push(`/search?q=${encodeURIComponent(q.trim())}`);
-      }}
-      className="flex-1 max-w-[640px] relative"
-    >
-      <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--color-ink-4)]" />
-      <input
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-        placeholder="iphone 15, macbook, кофемашина..."
-        className="input pl-11 pr-4 py-2.5 text-sm rounded-full"
-      />
-    </form>
+    <div ref={wrapRef} className="flex-1 max-w-[640px] relative">
+      <form onSubmit={(e) => { e.preventDefault(); submit(q); }}>
+        <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--color-ink-4)]" />
+        <input
+          value={q}
+          onFocus={() => setOpen(true)}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="iphone 15, macbook, кофемашина..."
+          className="input pl-11 pr-4 py-2.5 text-sm rounded-full"
+        />
+      </form>
+
+      <AnimatePresence>
+        {open && items.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+            className="absolute top-full mt-2 left-0 right-0 card !rounded-2xl p-2 z-50 shadow-[0_24px_48px_rgba(11,13,18,0.10)]"
+          >
+            <div className="flex items-center justify-between px-2 py-1.5">
+              <span className="text-xs font-semibold uppercase tracking-wider text-[var(--color-ink-4)]">
+                Недавние поиски
+              </span>
+              <button
+                type="button"
+                onClick={() => history.clear()}
+                className="text-xs text-[var(--color-ink-4)] hover:text-[var(--color-ink-2)] inline-flex items-center gap-1"
+              >
+                <Trash2 className="w-3 h-3" /> Очистить
+              </button>
+            </div>
+            <ul>
+              {items.slice(0, 8).map((it) => (
+                <li key={it.q} className="group">
+                  <button
+                    type="button"
+                    onClick={() => submit(it.q)}
+                    className="w-full flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-[var(--color-surface-2)] text-left"
+                  >
+                    <Clock className="w-4 h-4 text-[var(--color-ink-4)]" />
+                    <span className="flex-1 truncate text-sm text-[var(--color-ink-2)]">{it.q}</span>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); history.remove(it.q); }}
+                      className="opacity-0 group-hover:opacity-100 p-1 -m-1 rounded hover:bg-white/60"
+                      aria-label="Убрать"
+                    >
+                      <X className="w-3.5 h-3.5 text-[var(--color-ink-4)]" />
+                    </button>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function Avatar({ name }: { name: string }) {
+  // First grapheme of the display name (or e-mail before "@") in a coloured ring.
+  const ch = (name || "?").trim().charAt(0).toUpperCase();
+  return (
+    <div className="relative">
+      <div
+        className={clsx(
+          "w-9 h-9 rounded-full grid place-items-center text-white font-semibold text-sm",
+          "bg-gradient-to-br from-indigo-500 to-fuchsia-500",
+        )}
+      >
+        {ch}
+      </div>
+      <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-400 border-2 border-white" />
+    </div>
   );
 }
 
@@ -48,10 +133,8 @@ export function Header() {
       className="sticky top-0 z-30 bg-[color:var(--color-bg)]/85 backdrop-blur border-b border-[var(--color-line)]"
     >
       <div className="max-w-[1240px] mx-auto px-6 h-16 flex items-center gap-6">
-        <Link href="/" className="flex items-center gap-2 group">
-          <span className="w-8 h-8 rounded-xl bg-[var(--color-ink)] grid place-items-center text-white font-bold text-sm transition-transform group-hover:scale-105">
-            P
-          </span>
+        <Link href="/" className="flex items-center gap-2 group" aria-label="PricePulse — главная">
+          <Logo size={32} />
           <span className="font-semibold tracking-tight">PricePulse</span>
         </Link>
 
@@ -63,14 +146,15 @@ export function Header() {
           <Link href="/favorites" className="btn btn-ghost !py-2 !px-3 rounded-full" aria-label="Избранное">
             <Heart className="w-4 h-4" />
           </Link>
+
           {loading ? (
             <div className="w-9 h-9 rounded-full bg-[var(--color-surface-2)] animate-pulse" />
           ) : user ? (
-            <div className="flex items-center gap-2">
-              <div className="hidden md:block text-right">
-                <div className="text-xs text-[var(--color-ink-4)] leading-none">{user.display_name ?? "Привет"}</div>
-                <div className="text-xs text-[var(--color-ink-3)] truncate max-w-[140px]">{user.email}</div>
-              </div>
+            <div className="flex items-center gap-2.5 pl-1">
+              <Avatar name={user.display_name ?? user.email ?? "?"} />
+              <span className="hidden md:block text-sm font-medium text-[var(--color-ink-2)] max-w-[140px] truncate">
+                {user.display_name ?? user.email.split("@")[0]}
+              </span>
               <button
                 onClick={() => { api.auth.logout(); router.push("/"); }}
                 className="btn btn-ghost !p-2 rounded-full"
@@ -83,7 +167,7 @@ export function Header() {
           ) : (
             <>
               <Link href="/login" className="btn btn-ghost !py-2 rounded-full hidden sm:inline-flex">
-                <UserIcon className="w-4 h-4" /> Войти
+                Войти
               </Link>
               <Link href="/register" className="btn btn-primary !py-2 rounded-full">
                 Создать аккаунт

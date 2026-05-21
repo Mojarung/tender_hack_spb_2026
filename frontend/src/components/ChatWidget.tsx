@@ -1,10 +1,11 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { Bot, Send, Sparkles, X } from "lucide-react";
+import { Send, Sparkles, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { api } from "@/lib/api";
+import { ChatBubbleIcon } from "./ChatBubbleIcon";
 
 interface Msg { role: "user" | "assistant"; text: string; }
 
@@ -60,7 +61,7 @@ export function ChatWidget() {
             </motion.span>
           ) : (
             <motion.span key="b" initial={{ rotate: 90, opacity: 0 }} animate={{ rotate: 0, opacity: 1 }} exit={{ rotate: -90, opacity: 0 }} transition={{ duration: 0.2 }}>
-              <Bot className="w-5 h-5" />
+              <ChatBubbleIcon size={22} />
             </motion.span>
           )}
         </AnimatePresence>
