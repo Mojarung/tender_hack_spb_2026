@@ -1,10 +1,10 @@
 "use client";
 
-import { AnimatePresence, motion } from "framer-motion";
-import { CornerDownLeft, SparkleIcon } from "lucide-react";
+import { motion } from "framer-motion";
+import { CornerDownLeft, SearchX } from "lucide-react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useRef, useState } from "react";
 
 import { ProductCard } from "@/components/ProductCard";
 import { GridSkeleton } from "@/components/Skeleton";
@@ -14,22 +14,65 @@ import { SOURCE_LABEL, type SearchResponse, type Source } from "@/lib/types";
 export const dynamic = "force-dynamic";
 
 function SearchInner() {
+  const router = useRouter();
   const params = useSearchParams();
   const q = (params.get("q") ?? "").trim();
+  const from = (params.get("from") ?? "").trim();    // original user query (after a fix)
   const nofix = params.get("nofix") === "1";
   const [data, setData] = useState<SearchResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<Source | "all">("all");
 
+  /** When we replace the URL to the corrected query, the effect re-fires
+   *  for the new `q`. The next run reuses the data already in state and
+   *  just clears the loading flag — no duplicate request. */
+  const skipNextFetch = useRef(false);
+
   useEffect(() => {
     if (!q) { setLoading(false); return; }
+
+    if (skipNextFetch.current) {
+      skipNextFetch.current = false;
+      setLoading(false);
+      return;
+    }
+
     let cancelled = false;
     setData(null); setErr(null); setLoading(true);
-    api.search(q, 16, { nofix })
-      .then((r) => { if (!cancelled) { setData(r); setLoading(false); } })
-      .catch((e) => { if (!cancelled) { setErr(String(e?.message ?? e)); setLoading(false); } });
+
+    // `from` present ⇒ we're already showing the canonical query.
+    const useNofix = nofix || !!from;
+
+    api.search(q, 16, { nofix: useNofix })
+      .then((r) => {
+        if (cancelled) return;
+        const fixed = r.query.normalized.trim();
+        const willReplace = !useNofix && !!fixed && fixed !== q.toLowerCase();
+
+        if (willReplace) {
+          // Keep the loader on screen until the URL is rewritten — that's
+          // when the header search box swaps to the corrected query.
+          skipNextFetch.current = true;
+          setData(r);
+          const sp = new URLSearchParams();
+          sp.set("q", fixed);
+          sp.set("from", q);
+          router.replace(`/search?${sp.toString()}`);
+          // loading stays true; the next effect run flips it.
+        } else {
+          setData(r);
+          setLoading(false);
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setErr(String(e?.message ?? e));
+          setLoading(false);
+        }
+      });
     return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, nofix]);
 
   if (!q) {
@@ -89,26 +132,49 @@ function SearchInner() {
           <p className="text-sm text-[var(--color-ink-4)] mt-1">
             {loading ? "Идёт поиск…" : `Найдено ${all.length} предложений`}
           </p>
-        </motion.div>
 
-        <CorrectionBanner data={data} rawQuery={q} nofix={nofix} />
+          {/* tiny inline hint — replaces the old banner card */}
+          {from && !nofix && (
+            <motion.p
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+              className="mt-2 text-xs text-[var(--color-ink-4)]"
+            >
+              <CornerDownLeft className="inline w-3 h-3 mr-1 -mt-0.5" />
+              исправлено из «{from}» ·{" "}
+              <Link
+                href={`/search?q=${encodeURIComponent(from)}&nofix=1`}
+                className="text-[var(--color-accent)] hover:underline"
+              >
+                искать как написал
+              </Link>
+            </motion.p>
+          )}
+          {nofix && (
+            <motion.p
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+              className="mt-2 text-xs text-[var(--color-ink-4)]"
+            >
+              без исправлений ·{" "}
+              <Link
+                href={`/search?q=${encodeURIComponent(q)}`}
+                className="text-[var(--color-accent)] hover:underline"
+              >
+                включить
+              </Link>
+            </motion.p>
+          )}
+        </motion.div>
 
         {err && (
           <div className="mt-4 p-3 rounded-xl bg-amber-50 text-amber-800 text-sm border border-amber-200">
-            Бэкенд: {err}
+            {err}
           </div>
         )}
 
         {loading ? (
           <div className="mt-6"><GridSkeleton count={6} /></div>
         ) : empty ? (
-          <div className="mt-6 card p-12 text-center">
-            <div className="text-3xl">🔎</div>
-            <p className="mt-3 text-[var(--color-ink-2)] font-semibold">Ничего не нашли</p>
-            <p className="text-sm text-[var(--color-ink-4)] mt-1">
-              Источники могли временно заблокировать запрос. Попробуйте чуть позже или измените формулировку.
-            </p>
-          </div>
+          <EmptyState query={q} />
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 mt-6">
             {offers.map((o, i) => (
@@ -129,61 +195,42 @@ export default function SearchPage() {
   );
 }
 
-function CorrectionBanner({
-  data, rawQuery, nofix,
-}: { data: SearchResponse | null; rawQuery: string; nofix: boolean }) {
-  // Show only when the backend actually rewrote the query.
-  const normalized = data?.query?.normalized ?? "";
-  const cleanedRaw = rawQuery.trim().toLowerCase();
-  const changed = !!normalized && normalized !== cleanedRaw;
-  const expansions = data?.query?.expansions ?? [];
-
+function EmptyState({ query }: { query: string }) {
   return (
-    <AnimatePresence initial={false}>
-      {nofix ? (
-        <motion.div
-          key="reverted"
-          initial={{ opacity: 0, y: -4 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -4 }}
-          className="mt-4 p-3 rounded-xl bg-[var(--color-surface-2)] text-sm flex items-center gap-2 text-[var(--color-ink-3)] border border-[var(--color-line)]"
-        >
-          <CornerDownLeft className="w-4 h-4 text-[var(--color-ink-4)]" />
-          Ищем точно как написано — без исправлений.
-          <Link
-            href={`/search?q=${encodeURIComponent(rawQuery)}`}
-            className="ml-auto text-[var(--color-accent)] hover:underline font-medium"
-          >
-            Включить исправления
+    <motion.div
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+      className="mt-6 card p-10 md:p-14 flex flex-col items-center text-center"
+    >
+      {/* Stylised emblem — concentric rings + SearchX in the centre.
+          Sits on a soft indigo-tinted surface that matches our accent. */}
+      <div className="relative grid place-items-center mb-6">
+        <span className="absolute w-28 h-28 rounded-full bg-[var(--color-accent-50)]" />
+        <span className="absolute w-20 h-20 rounded-full bg-[var(--color-accent-100)]" />
+        <span className="relative w-14 h-14 rounded-full bg-white border border-[var(--color-line)] grid place-items-center">
+          <SearchX className="w-6 h-6 text-[var(--color-ink-3)]" strokeWidth={1.75} />
+        </span>
+      </div>
+
+      <h2 className="text-xl md:text-2xl font-semibold tracking-tight">
+        Ничего не нашли по{" "}
+        <span className="text-[var(--color-accent)]">«{query}»</span>
+      </h2>
+      <p className="mt-2 text-sm text-[var(--color-ink-4)] max-w-md">
+        Источники могли временно ограничить запрос или мы не угадали
+        формулировку. Попробуйте короче или с другими словами.
+      </p>
+
+      <div className="mt-6 flex flex-wrap items-center justify-center gap-2 text-xs">
+        <span className="text-[var(--color-ink-4)]">похожее:</span>
+        {["iphone 15", "macbook air m3", "робот пылесос", "sony wh-1000xm5"].map((s) => (
+          <Link key={s} href={`/search?q=${encodeURIComponent(s)}`} className="chip">
+            {s}
           </Link>
-        </motion.div>
-      ) : changed && (
-        <motion.div
-          key="fixed"
-          initial={{ opacity: 0, y: -4 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -4 }}
-          className="mt-4 p-3 rounded-xl bg-[var(--color-accent-50)] border border-[var(--color-accent-100)] text-sm flex flex-wrap items-center gap-x-2 gap-y-1"
-        >
-          <SparkleIcon className="w-4 h-4 text-[var(--color-accent)]" />
-          <span className="text-[var(--color-ink-2)]">
-            Исправили на{" "}
-            <span className="font-semibold text-[var(--color-ink)]">«{normalized}»</span>
-          </span>
-          {expansions.length > 0 && (
-            <span className="text-[var(--color-ink-4)] text-xs">
-              · {expansions.join(" · ")}
-            </span>
-          )}
-          <Link
-            href={`/search?q=${encodeURIComponent(rawQuery)}&nofix=1`}
-            className="ml-auto text-[var(--color-accent)] hover:underline font-medium"
-          >
-            Искать «{rawQuery}»
-          </Link>
-        </motion.div>
-      )}
-    </AnimatePresence>
+        ))}
+      </div>
+    </motion.div>
   );
 }
 
