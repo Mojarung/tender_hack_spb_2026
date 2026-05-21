@@ -25,6 +25,11 @@ import structlog
 
 from pricepulse.domain.enums import SourceKind
 from pricepulse.domain.models import NormalizedQuery, ProductOffer
+from pricepulse.observability.metrics import (
+    scrape_duration_seconds,
+    scrape_offers_returned_total,
+    scrape_requests_total,
+)
 from pricepulse.scrapers.base import OnOffer, ScrapeResult
 
 log = structlog.get_logger(__name__)
@@ -155,35 +160,43 @@ class YandexMarketScraper:
             return ScrapeResult(source=self.source, offers=[], error="curl_cffi not installed")
 
         url = f"{_BASE}/search?text={quote(query.normalized or query.raw)}"
+        src = self.source.value
 
-        try:
-            async with AsyncSession(impersonate="chrome131", timeout=self._timeout) as s:
-                resp = await s.get(url, headers=_HEADERS)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("ya_market.fetch_failed", error=str(exc))
-            return ScrapeResult(
-                source=self.source, offers=[],
-                error=f"ya_market fetch failed: {exc}"
-            )
+        with scrape_duration_seconds.labels(source=src).time():
+            try:
+                async with AsyncSession(impersonate="chrome131", timeout=self._timeout) as s:
+                    resp = await s.get(url, headers=_HEADERS)
+            except Exception as exc:  # noqa: BLE001
+                scrape_requests_total.labels(source=src, outcome="timeout", proxy_tier="none").inc()
+                log.warning("ya_market.fetch_failed", error=str(exc))
+                return ScrapeResult(
+                    source=self.source, offers=[],
+                    error=f"ya_market fetch failed: {exc}"
+                )
 
-        if resp.status_code != 200 or "showcaptcha" in resp.url:
-            return ScrapeResult(
-                source=self.source, offers=[],
-                error=f"ya_market HTTP {resp.status_code} (likely SmartCaptcha)",
-            )
+            captcha = "showcaptcha" in resp.url
+            if resp.status_code != 200 or captcha:
+                outcome = "captcha" if captcha else "blocked"
+                scrape_requests_total.labels(source=src, outcome=outcome, proxy_tier="none").inc()
+                return ScrapeResult(
+                    source=self.source, offers=[],
+                    error=f"ya_market HTTP {resp.status_code} (likely SmartCaptcha)",
+                )
 
-        html = resp.text
-        blocks = _ldjson_blocks(html)
-        products = _walk_ldjson(blocks)
-        offers: list[ProductOffer] = []
-        for p in products:
-            offer = _to_offer(p)
-            if offer is None:
-                continue
-            offers.append(offer)
-            if on_offer is not None:
-                await on_offer(offer)
-            if len(offers) >= limit:
-                break
-        log.info("ya_market.ok", returned=len(offers), ldjson_blocks=len(blocks))
-        return ScrapeResult(source=self.source, offers=offers)
+            html = resp.text
+            blocks = _ldjson_blocks(html)
+            products = _walk_ldjson(blocks)
+            offers: list[ProductOffer] = []
+            for p in products:
+                offer = _to_offer(p)
+                if offer is None:
+                    continue
+                offers.append(offer)
+                if on_offer is not None:
+                    await on_offer(offer)
+                if len(offers) >= limit:
+                    break
+            scrape_requests_total.labels(source=src, outcome="ok", proxy_tier="none").inc()
+            scrape_offers_returned_total.labels(source=src).inc(len(offers))
+            log.info("ya_market.ok", returned=len(offers), ldjson_blocks=len(blocks))
+            return ScrapeResult(source=self.source, offers=offers)

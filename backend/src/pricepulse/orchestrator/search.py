@@ -15,9 +15,10 @@ from typing import Any
 
 import structlog
 
+from pricepulse.analytics.scoring import best_deal_score
 from pricepulse.cache.redis_cache import RedisCache
 from pricepulse.domain.enums import SourceKind
-from pricepulse.domain.models import NormalizedQuery, ProductOffer, SourceGroup
+from pricepulse.domain.models import NormalizedQuery, ProductOffer, RankedOffer, SourceGroup
 from pricepulse.enrichment.normalize import normalize_query
 from pricepulse.scrapers.base import ScraperProtocol, ScrapeResult
 from pricepulse.scrapers.ozon import OzonScraper
@@ -70,13 +71,15 @@ class SearchOrchestrator:
         query: str,
         max_per_source: int,
         sources: list[SourceKind] | None = None,
-    ) -> tuple[NormalizedQuery, list[SourceGroup]]:
+    ) -> tuple[NormalizedQuery, list[SourceGroup], list[RankedOffer]]:
         normalized = await normalize_query(query)
         adapters = self._pick(sources)
         results = await asyncio.gather(
             *[self._safe_call(a, normalized, max_per_source) for a in adapters]
         )
-        return normalized, [_to_group(r) for r in results]
+        groups = [_to_group(r) for r in results]
+        top_deals = _rank_top_deals(groups, top_k=10)
+        return normalized, groups, top_deals
 
     async def stream(
         self,
@@ -195,3 +198,32 @@ def _to_group(result: ScrapeResult) -> SourceGroup:
         offers=offers,
         error=result.error,
     )
+
+
+def _rank_top_deals(groups: list[SourceGroup], top_k: int = 10) -> list[RankedOffer]:
+    """Best-Deal Score across ALL sources, returns top-K as RankedOffer.
+
+    Price population = every offer in the result set, so price_z is computed
+    cross-source — that lets a cheap Megamarket offer outrank a more famous WB
+    one on identical specs.
+    """
+    all_offers: list[ProductOffer] = []
+    for g in groups:
+        all_offers.extend(g.offers)
+    if not all_offers:
+        return []
+    prices = [o.price for o in all_offers]
+    ranked: list[tuple[float, ProductOffer]] = []
+    for o in all_offers:
+        score = best_deal_score(
+            price=o.price,
+            rating=o.rating or 0.0,
+            reviews_count=int(o.characteristics.get("feedbacks") or 0),
+            price_population=prices,
+        )
+        ranked.append((score, o))
+    ranked.sort(key=lambda x: x[0], reverse=True)
+    return [
+        RankedOffer(offer=o, score=round(s, 4), rank=i + 1)
+        for i, (s, o) in enumerate(ranked[:top_k])
+    ]

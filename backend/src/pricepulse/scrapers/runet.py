@@ -22,6 +22,11 @@ import structlog
 from pricepulse.config import get_settings
 from pricepulse.domain.enums import SourceKind
 from pricepulse.domain.models import NormalizedQuery, ProductOffer
+from pricepulse.observability.metrics import (
+    scrape_duration_seconds,
+    scrape_offers_returned_total,
+    scrape_requests_total,
+)
 from pricepulse.scrapers.base import OnOffer, ScrapeResult
 
 log = structlog.get_logger(__name__)
@@ -114,56 +119,65 @@ class RunetScraper:
             "Content-Type": "application/json",
         }
 
-        async with httpx.AsyncClient(headers=headers, timeout=self._timeout) as client:
-            try:
-                search_resp = await client.post(
-                    f"{base}/search",
-                    json={
-                        "query": f"{query.normalized or query.raw} купить цена",
-                        "limit": max(limit * 3, 10),
-                        "sources": [{"type": "web"}],
-                        "scrapeOptions": {
-                            "formats": [
-                                {
-                                    "type": "json",
-                                    "schema": _OFFER_SCHEMA,
-                                    "prompt": (
-                                        "Это карточка товара в интернет-магазине. "
-                                        "Извлеки название (name), цену в рублях (price, integer), "
-                                        "ссылку на товар (url), картинку (image)."
-                                    ),
-                                }
-                            ],
-                            "onlyMainContent": True,
+        src = self.source.value
+        with scrape_duration_seconds.labels(source=src).time():
+            async with httpx.AsyncClient(headers=headers, timeout=self._timeout) as client:
+                try:
+                    search_resp = await client.post(
+                        f"{base}/search",
+                        json={
+                            "query": f"{query.normalized or query.raw} купить цена",
+                            "limit": max(limit * 3, 10),
+                            "sources": [{"type": "web"}],
+                            "scrapeOptions": {
+                                "formats": [
+                                    {
+                                        "type": "json",
+                                        "schema": _OFFER_SCHEMA,
+                                        "prompt": (
+                                            "Это карточка товара в интернет-магазине. "
+                                            "Извлеки название (name), цену в рублях (price, integer), "
+                                            "ссылку на товар (url), картинку (image)."
+                                        ),
+                                    }
+                                ],
+                                "onlyMainContent": True,
+                            },
                         },
-                    },
-                )
-                search_resp.raise_for_status()
-            except httpx.HTTPError as exc:
-                log.warning("runet.search_failed", error=str(exc))
-                return ScrapeResult(
-                    source=self.source, offers=[],
-                    error=f"firecrawl search failed: {exc}",
-                )
+                    )
+                    search_resp.raise_for_status()
+                except httpx.HTTPError as exc:
+                    scrape_requests_total.labels(
+                        source=src, outcome="timeout", proxy_tier="firecrawl",
+                    ).inc()
+                    log.warning("runet.search_failed", error=str(exc))
+                    return ScrapeResult(
+                        source=self.source, offers=[],
+                        error=f"firecrawl search failed: {exc}",
+                    )
 
-        body = search_resp.json()
-        results = (body.get("data") or {}).get("web") or []
-        offers: list[ProductOffer] = []
-        for item in results:
-            url = item.get("url") or ""
-            if not url or _excluded(url):
-                continue
-            payload = item.get("json") or {}
-            if not payload:
-                continue
-            offer = _to_offer(payload, source_url=url)
-            if offer is None:
-                continue
-            offers.append(offer)
-            if on_offer is not None:
-                await on_offer(offer)
-            if len(offers) >= limit:
-                break
+            body = search_resp.json()
+            results = (body.get("data") or {}).get("web") or []
+            offers: list[ProductOffer] = []
+            for item in results:
+                url = item.get("url") or ""
+                if not url or _excluded(url):
+                    continue
+                payload = item.get("json") or {}
+                if not payload:
+                    continue
+                offer = _to_offer(payload, source_url=url)
+                if offer is None:
+                    continue
+                offers.append(offer)
+                if on_offer is not None:
+                    await on_offer(offer)
+                if len(offers) >= limit:
+                    break
 
-        log.info("runet.ok", returned=len(offers), credits=body.get("creditsUsed"))
-        return ScrapeResult(source=self.source, offers=offers)
+            scrape_requests_total.labels(
+                source=src, outcome="ok", proxy_tier="firecrawl",
+            ).inc()
+            scrape_offers_returned_total.labels(source=src).inc(len(offers))
+            log.info("runet.ok", returned=len(offers), credits=body.get("creditsUsed"))
+            return ScrapeResult(source=self.source, offers=offers)

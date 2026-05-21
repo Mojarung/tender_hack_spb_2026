@@ -23,6 +23,11 @@ import structlog
 
 from pricepulse.domain.enums import SourceKind
 from pricepulse.domain.models import NormalizedQuery, ProductOffer
+from pricepulse.observability.metrics import (
+    scrape_duration_seconds,
+    scrape_offers_returned_total,
+    scrape_requests_total,
+)
 from pricepulse.scrapers.base import OnOffer, ScrapeResult
 
 log = structlog.get_logger(__name__)
@@ -174,33 +179,48 @@ class OzonScraper:
         path = f"/search/?text={quote(query.normalized or query.raw)}&from_global=true"
         url = f"{_BASE_URL}?url={quote(path, safe='')}"
 
-        try:
-            async with AsyncSession(impersonate="chrome131", timeout=self._timeout) as s:
-                resp = await s.get(url, headers=_HEADERS)
-        except Exception as exc:  # noqa: BLE001 — curl_cffi raises generic errors
-            log.warning("ozon.fetch_failed", error=str(exc))
-            return ScrapeResult(
-                source=self.source, offers=[], error=f"ozon fetch failed: {exc}"
-            )
+        with scrape_duration_seconds.labels(source=self.source.value).time():
+            try:
+                async with AsyncSession(impersonate="chrome131", timeout=self._timeout) as s:
+                    resp = await s.get(url, headers=_HEADERS)
+            except Exception as exc:  # noqa: BLE001 — curl_cffi raises generic errors
+                scrape_requests_total.labels(
+                    source=self.source.value, outcome="timeout", proxy_tier="none",
+                ).inc()
+                log.warning("ozon.fetch_failed", error=str(exc))
+                return ScrapeResult(
+                    source=self.source, offers=[], error=f"ozon fetch failed: {exc}"
+                )
 
-        if resp.status_code != 200:
-            log.warning("ozon.bad_status", status=resp.status_code)
-            return ScrapeResult(
-                source=self.source, offers=[], error=f"ozon HTTP {resp.status_code}"
-            )
+            if resp.status_code != 200:
+                outcome = "blocked" if resp.status_code in (403, 451) else "http_4xx"
+                scrape_requests_total.labels(
+                    source=self.source.value, outcome=outcome, proxy_tier="none",
+                ).inc()
+                log.warning("ozon.bad_status", status=resp.status_code)
+                return ScrapeResult(
+                    source=self.source, offers=[], error=f"ozon HTTP {resp.status_code}"
+                )
 
-        try:
-            body = orjson.loads(resp.content)
-        except orjson.JSONDecodeError:
-            return ScrapeResult(
-                source=self.source, offers=[], error="ozon non-json response"
-            )
+            try:
+                body = orjson.loads(resp.content)
+            except orjson.JSONDecodeError:
+                scrape_requests_total.labels(
+                    source=self.source.value, outcome="http_5xx", proxy_tier="none",
+                ).inc()
+                return ScrapeResult(
+                    source=self.source, offers=[], error="ozon non-json response"
+                )
 
-        widget_states = body.get("widgetStates") or {}
-        payloads = _iter_search_widgets(widget_states)
-        offers = _extract_offers(payloads, limit=limit)
-        if on_offer is not None:
-            for o in offers:
-                await on_offer(o)
-        log.info("ozon.ok", returned=len(offers))
-        return ScrapeResult(source=self.source, offers=offers)
+            widget_states = body.get("widgetStates") or {}
+            payloads = _iter_search_widgets(widget_states)
+            offers = _extract_offers(payloads, limit=limit)
+            if on_offer is not None:
+                for o in offers:
+                    await on_offer(o)
+            scrape_requests_total.labels(
+                source=self.source.value, outcome="ok", proxy_tier="none",
+            ).inc()
+            scrape_offers_returned_total.labels(source=self.source.value).inc(len(offers))
+            log.info("ozon.ok", returned=len(offers))
+            return ScrapeResult(source=self.source, offers=offers)

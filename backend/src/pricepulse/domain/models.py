@@ -44,8 +44,18 @@ class SearchRequest(BaseModel):
     sources: list[SourceKind] | None = None
 
 
+class RankedOffer(BaseModel):
+    offer: ProductOffer
+    score: float = Field(..., description="Best-Deal Score (higher = better)")
+    rank: int
+
+
 class SearchResponse(BaseModel):
     query: NormalizedQuery
     groups: list[SourceGroup]
+    top_deals: list[RankedOffer] = Field(
+        default_factory=list,
+        description="Best offers across all sources, ranked by Best-Deal Score.",
+    )
     took_ms: int
     partial: bool = False

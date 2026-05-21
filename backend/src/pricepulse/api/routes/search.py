@@ -12,10 +12,15 @@ router = APIRouter(prefix="/search", tags=["search"])
 async def search(req: SearchRequest) -> SearchResponse:
     started = time.perf_counter()
     orchestrator = SearchOrchestrator()
-    normalized, groups = await orchestrator.run(
+    normalized, groups, top_deals = await orchestrator.run(
         query=req.query,
         max_per_source=req.max_per_source,
         sources=req.sources,
     )
     took_ms = int((time.perf_counter() - started) * 1000)
-    return SearchResponse(query=normalized, groups=groups, took_ms=took_ms)
+    return SearchResponse(
+        query=normalized,
+        groups=groups,
+        top_deals=top_deals,
+        took_ms=took_ms,
+    )

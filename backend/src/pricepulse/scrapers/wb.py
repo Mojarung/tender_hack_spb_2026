@@ -21,8 +21,14 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
+from pricepulse.analytics.price_history import PriceHistoryStore
 from pricepulse.domain.enums import SourceKind
 from pricepulse.domain.models import NormalizedQuery, ProductOffer
+from pricepulse.observability.metrics import (
+    scrape_duration_seconds,
+    scrape_offers_returned_total,
+    scrape_requests_total,
+)
 from pricepulse.scrapers.base import OnOffer, ScrapeResult
 from pricepulse.scrapers.wb_basket import image_url as wb_image_url
 
@@ -109,9 +115,15 @@ def _to_offer(raw: dict[str, Any]) -> ProductOffer | None:
 class WildberriesScraper:
     source: SourceKind = SourceKind.WB
 
-    def __init__(self, dest: str = _DEFAULT_DEST, timeout_s: float = 10.0) -> None:
+    def __init__(
+        self,
+        dest: str = _DEFAULT_DEST,
+        timeout_s: float = 10.0,
+        price_history: PriceHistoryStore | None = None,
+    ) -> None:
         self._dest = dest
         self._timeout = timeout_s
+        self._price_history = price_history
 
     async def search(
         self,
@@ -133,35 +145,51 @@ class WildberriesScraper:
                 resp.raise_for_status()
                 return resp
 
-        try:
-            resp = None
-            async for attempt in AsyncRetrying(
-                retry=retry_if_exception_type(httpx.HTTPStatusError),
-                stop=stop_after_attempt(3),
-                wait=wait_exponential_jitter(initial=1, max=8),
-                reraise=True,
-            ):
-                with attempt:
-                    resp = await _fetch()
-            assert resp is not None
-        except httpx.HTTPError as exc:
-            log.warning("wb.fetch_failed", error=str(exc))
-            return ScrapeResult(source=self.source, offers=[], error=f"wb fetch failed: {exc}")
+        outcome = "ok"
+        with scrape_duration_seconds.labels(source=self.source.value).time():
+            try:
+                resp = None
+                async for attempt in AsyncRetrying(
+                    retry=retry_if_exception_type(httpx.HTTPStatusError),
+                    stop=stop_after_attempt(3),
+                    wait=wait_exponential_jitter(initial=1, max=8),
+                    reraise=True,
+                ):
+                    with attempt:
+                        resp = await _fetch()
+                assert resp is not None
+            except httpx.HTTPError as exc:
+                outcome = "http_4xx" if isinstance(exc, httpx.HTTPStatusError) else "timeout"
+                scrape_requests_total.labels(
+                    source=self.source.value, outcome=outcome, proxy_tier="none",
+                ).inc()
+                log.warning("wb.fetch_failed", error=str(exc))
+                return ScrapeResult(source=self.source, offers=[], error=f"wb fetch failed: {exc}")
 
-        body = resp.json()
-        # WB v18 places `products` at the top level; older API versions had
-        # `data.products`. Accept both for forward/backward compatibility.
-        products = body.get("products") or (body.get("data") or {}).get("products") or []
-        offers: list[ProductOffer] = []
-        for raw in products[:limit]:
-            offer = _to_offer(raw)
-            if offer is None:
-                continue
-            offers.append(offer)
-            if on_offer is not None:
-                await on_offer(offer)
-        log.info("wb.ok", returned=len(offers), requested=limit)
-        return ScrapeResult(source=self.source, offers=offers)
+            body = resp.json()
+            # WB v18 places `products` at the top level; older API versions had
+            # `data.products`. Accept both for forward/backward compatibility.
+            products = body.get("products") or (body.get("data") or {}).get("products") or []
+            offers: list[ProductOffer] = []
+            for raw in products[:limit]:
+                offer = _to_offer(raw)
+                if offer is None:
+                    continue
+                offers.append(offer)
+                # Capture price-history point. Item id is the WB nm_id, parsed from URL.
+                if self._price_history is not None:
+                    nm_id = str(raw.get("id") or "")
+                    if nm_id:
+                        await self._price_history.record(self.source.value, nm_id, offer.price)
+                if on_offer is not None:
+                    await on_offer(offer)
+
+            scrape_requests_total.labels(
+                source=self.source.value, outcome=outcome, proxy_tier="none",
+            ).inc()
+            scrape_offers_returned_total.labels(source=self.source.value).inc(len(offers))
+            log.info("wb.ok", returned=len(offers), requested=limit)
+            return ScrapeResult(source=self.source, offers=offers)
 
 
 # Keep module-level coroutine helper for arq tasks

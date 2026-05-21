@@ -22,6 +22,11 @@ import structlog
 
 from pricepulse.domain.enums import SourceKind
 from pricepulse.domain.models import NormalizedQuery, ProductOffer
+from pricepulse.observability.metrics import (
+    scrape_duration_seconds,
+    scrape_offers_returned_total,
+    scrape_requests_total,
+)
 from pricepulse.scrapers.base import OnOffer, ScrapeResult
 
 log = structlog.get_logger(__name__)
@@ -127,34 +132,43 @@ class MegamarketScraper:
             "auth": {"locationId": "50", "appPlatform": "WEB"},
         }
 
-        try:
-            async with AsyncSession(impersonate="chrome131", timeout=self._timeout) as s:
-                # Warm-up: pick up mg_sid from the homepage.
-                await s.get(_BASE, headers=_HEADERS)
-                resp = await s.post(_SEARCH, headers=_HEADERS, content=orjson.dumps(body))
-        except Exception as exc:  # noqa: BLE001
-            log.warning("megamarket.fetch_failed", error=str(exc))
-            return ScrapeResult(source=self.source, offers=[], error=f"mm fetch failed: {exc}")
+        src = "megamarket"  # reported as RUNET source group, distinguish in metrics
 
-        if resp.status_code != 200:
-            return ScrapeResult(
-                source=self.source, offers=[],
-                error=f"mm HTTP {resp.status_code}"
-            )
+        with scrape_duration_seconds.labels(source=src).time():
+            try:
+                async with AsyncSession(impersonate="chrome131", timeout=self._timeout) as s:
+                    # Warm-up: pick up mg_sid from the homepage.
+                    await s.get(_BASE, headers=_HEADERS)
+                    resp = await s.post(_SEARCH, headers=_HEADERS, content=orjson.dumps(body))
+            except Exception as exc:  # noqa: BLE001
+                scrape_requests_total.labels(source=src, outcome="timeout", proxy_tier="none").inc()
+                log.warning("megamarket.fetch_failed", error=str(exc))
+                return ScrapeResult(source=self.source, offers=[], error=f"mm fetch failed: {exc}")
 
-        try:
-            data = orjson.loads(resp.content)
-        except orjson.JSONDecodeError:
-            return ScrapeResult(source=self.source, offers=[], error="mm non-json")
+            if resp.status_code != 200:
+                outcome = "blocked" if resp.status_code in (403, 451) else "http_4xx"
+                scrape_requests_total.labels(source=src, outcome=outcome, proxy_tier="none").inc()
+                return ScrapeResult(
+                    source=self.source, offers=[],
+                    error=f"mm HTTP {resp.status_code}"
+                )
 
-        items = ((data.get("data") or {}).get("catalogListing") or {}).get("items") or []
-        offers: list[ProductOffer] = []
-        for item in items[:limit]:
-            o = _to_offer(item)
-            if o is None:
-                continue
-            offers.append(o)
-            if on_offer is not None:
-                await on_offer(o)
-        log.info("megamarket.ok", returned=len(offers))
-        return ScrapeResult(source=self.source, offers=offers)
+            try:
+                data = orjson.loads(resp.content)
+            except orjson.JSONDecodeError:
+                scrape_requests_total.labels(source=src, outcome="http_5xx", proxy_tier="none").inc()
+                return ScrapeResult(source=self.source, offers=[], error="mm non-json")
+
+            items = ((data.get("data") or {}).get("catalogListing") or {}).get("items") or []
+            offers: list[ProductOffer] = []
+            for item in items[:limit]:
+                o = _to_offer(item)
+                if o is None:
+                    continue
+                offers.append(o)
+                if on_offer is not None:
+                    await on_offer(o)
+            scrape_requests_total.labels(source=src, outcome="ok", proxy_tier="none").inc()
+            scrape_offers_returned_total.labels(source=src).inc(len(offers))
+            log.info("megamarket.ok", returned=len(offers))
+            return ScrapeResult(source=self.source, offers=offers)
