@@ -50,10 +50,10 @@ async function http<T>(path: string, init: RequestInit = {}, expect = "json"): P
 export const api = {
   health: () => http<{ status: string }>("/health"),
 
-  search: (query: string, max_per_source = 6) =>
+  search: (query: string, max_per_source = 6, opts?: { nofix?: boolean }) =>
     http<SearchResponse>("/api/v1/search", {
       method: "POST",
-      body: JSON.stringify({ query, max_per_source }),
+      body: JSON.stringify({ query, max_per_source, nofix: opts?.nofix ?? false }),
     }),
 
   favorites: {

@@ -23,9 +23,10 @@ def _clean(text: str) -> str:
     return _WHITESPACE.sub(" ", text).strip()
 
 
-async def normalize_query(raw: str) -> NormalizedQuery:
+async def normalize_query(raw: str, *, fix: bool = True) -> NormalizedQuery:
+    """`fix=False` bypasses typo + translit (search raw as user typed)."""
     cleaned = _clean(raw)
-    if not cleaned:
+    if not cleaned or not fix:
         return NormalizedQuery(raw=raw, normalized=cleaned, expansions=[])
     canonical, notes = expand(cleaned)
     return NormalizedQuery(raw=raw, normalized=canonical, expansions=notes)

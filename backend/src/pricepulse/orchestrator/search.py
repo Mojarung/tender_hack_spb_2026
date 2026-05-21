@@ -71,8 +71,10 @@ class SearchOrchestrator:
         query: str,
         max_per_source: int,
         sources: list[SourceKind] | None = None,
+        *,
+        nofix: bool = False,
     ) -> tuple[NormalizedQuery, list[SourceGroup], list[RankedOffer]]:
-        normalized = await normalize_query(query)
+        normalized = await normalize_query(query, fix=not nofix)
         adapters = self._pick(sources)
         results = await asyncio.gather(
             *[self._safe_call(a, normalized, max_per_source) for a in adapters]

@@ -42,6 +42,10 @@ class SearchRequest(BaseModel):
     query: str
     max_per_source: int = Field(default=10, ge=1, le=50)
     sources: list[SourceKind] | None = None
+    nofix: bool = Field(
+        default=False,
+        description="Skip typo correction and RU→EN translit — search the raw cleaned text.",
+    )
 
 
 class RankedOffer(BaseModel):

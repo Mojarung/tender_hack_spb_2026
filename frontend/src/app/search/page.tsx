@@ -1,6 +1,8 @@
 "use client";
 
-import { motion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
+import { CornerDownLeft, SparkleIcon } from "lucide-react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 
@@ -14,6 +16,7 @@ export const dynamic = "force-dynamic";
 function SearchInner() {
   const params = useSearchParams();
   const q = (params.get("q") ?? "").trim();
+  const nofix = params.get("nofix") === "1";
   const [data, setData] = useState<SearchResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -23,11 +26,11 @@ function SearchInner() {
     if (!q) { setLoading(false); return; }
     let cancelled = false;
     setData(null); setErr(null); setLoading(true);
-    api.search(q, 16)
+    api.search(q, 16, { nofix })
       .then((r) => { if (!cancelled) { setData(r); setLoading(false); } })
       .catch((e) => { if (!cancelled) { setErr(String(e?.message ?? e)); setLoading(false); } });
     return () => { cancelled = true; };
-  }, [q]);
+  }, [q, nofix]);
 
   if (!q) {
     return (
@@ -88,6 +91,8 @@ function SearchInner() {
           </p>
         </motion.div>
 
+        <CorrectionBanner data={data} rawQuery={q} nofix={nofix} />
+
         {err && (
           <div className="mt-4 p-3 rounded-xl bg-amber-50 text-amber-800 text-sm border border-amber-200">
             Бэкенд: {err}
@@ -121,6 +126,64 @@ export default function SearchPage() {
     <Suspense fallback={<div className="text-[var(--color-ink-4)] text-sm">Загружаю…</div>}>
       <SearchInner />
     </Suspense>
+  );
+}
+
+function CorrectionBanner({
+  data, rawQuery, nofix,
+}: { data: SearchResponse | null; rawQuery: string; nofix: boolean }) {
+  // Show only when the backend actually rewrote the query.
+  const normalized = data?.query?.normalized ?? "";
+  const cleanedRaw = rawQuery.trim().toLowerCase();
+  const changed = !!normalized && normalized !== cleanedRaw;
+  const expansions = data?.query?.expansions ?? [];
+
+  return (
+    <AnimatePresence initial={false}>
+      {nofix ? (
+        <motion.div
+          key="reverted"
+          initial={{ opacity: 0, y: -4 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -4 }}
+          className="mt-4 p-3 rounded-xl bg-[var(--color-surface-2)] text-sm flex items-center gap-2 text-[var(--color-ink-3)] border border-[var(--color-line)]"
+        >
+          <CornerDownLeft className="w-4 h-4 text-[var(--color-ink-4)]" />
+          Ищем точно как написано — без исправлений.
+          <Link
+            href={`/search?q=${encodeURIComponent(rawQuery)}`}
+            className="ml-auto text-[var(--color-accent)] hover:underline font-medium"
+          >
+            Включить исправления
+          </Link>
+        </motion.div>
+      ) : changed && (
+        <motion.div
+          key="fixed"
+          initial={{ opacity: 0, y: -4 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -4 }}
+          className="mt-4 p-3 rounded-xl bg-[var(--color-accent-50)] border border-[var(--color-accent-100)] text-sm flex flex-wrap items-center gap-x-2 gap-y-1"
+        >
+          <SparkleIcon className="w-4 h-4 text-[var(--color-accent)]" />
+          <span className="text-[var(--color-ink-2)]">
+            Исправили на{" "}
+            <span className="font-semibold text-[var(--color-ink)]">«{normalized}»</span>
+          </span>
+          {expansions.length > 0 && (
+            <span className="text-[var(--color-ink-4)] text-xs">
+              · {expansions.join(" · ")}
+            </span>
+          )}
+          <Link
+            href={`/search?q=${encodeURIComponent(rawQuery)}&nofix=1`}
+            className="ml-auto text-[var(--color-accent)] hover:underline font-medium"
+          >
+            Искать «{rawQuery}»
+          </Link>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }
 
