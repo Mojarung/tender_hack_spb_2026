@@ -25,9 +25,14 @@ dependencies = [
     "redis>=5.2",
     "arq>=0.26",
     "asyncpg>=0.30",
+    "aiosqlite>=0.20",          # dev fallback when Postgres is not running
     "sqlalchemy[asyncio]>=2.0.36",
     "alembic>=1.14",
     "aioboto3>=13.0",
+    # ===== Auth (registration / favorites) =====
+    "fastapi-users[sqlalchemy]>=14.0",
+    # ===== Agent: MCP tool server + chatbot =====
+    "fastmcp>=3.2",
     # ===== NLP / fuzzy =====
     "rapidfuzz>=3.10",
     # ===== Observability =====

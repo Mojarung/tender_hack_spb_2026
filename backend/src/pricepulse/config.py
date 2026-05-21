@@ -84,6 +84,22 @@ class Settings(BaseSettings):
     # Cost guard (USD hard-cap for 24h of L3 + L4). $0 in free-mode.
     cost_cap_usd: int = 0
 
+    # ===== Auth =====
+    # JWT signing key — MUST be set in production. Empty default lets dev work,
+    # `openssl rand -hex 32` to generate.
+    auth_jwt_secret: str = "dev-only-change-in-prod-pricepulse-jwt-secret"
+    auth_jwt_lifetime_seconds: int = 24 * 3600    # 24h
+
+    # ===== Dev DB fallback =====
+    # Override Postgres entirely with a SQLite DSN when set — useful for
+    # `uv run uvicorn ...` without a running Postgres container.
+    sqlite_url: str = ""    # e.g. "sqlite+aiosqlite:///./pricepulse.db"
+
+    @property
+    def database_url(self) -> str:
+        """The actual DSN SQLAlchemy uses. SQLite override wins for dev."""
+        return self.sqlite_url or self.postgres_dsn
+
     @property
     def postgres_dsn(self) -> str:
         return (

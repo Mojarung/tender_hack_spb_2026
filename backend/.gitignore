@@ -15,3 +15,9 @@ build/
 
 # smoke / debug artifacts
 smoke_result.json
+
+# Dev SQLite DB (auto-created by lifespan create_all)
+pricepulse.db
+pricepulse.db-journal
+*.sqlite
+*.sqlite3
