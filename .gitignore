@@ -222,3 +222,7 @@ __marimo__/
 
 # MCP config (contains secrets — use .mcp.json.example as template)
 .mcp.json
+
+# Playwright MCP artifacts
+.playwright-mcp/
+frontend-home-*.png

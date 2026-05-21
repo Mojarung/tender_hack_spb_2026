@@ -1,7 +1,7 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 
 import { ProductCard } from "@/components/ProductCard";
 import { api } from "@/lib/api";
@@ -14,7 +14,9 @@ const SOURCE_LABEL: Record<Source, string> = {
   runet: "Рунет",
 };
 
-export default function SearchPage() {
+export const dynamic = "force-dynamic";
+
+function SearchInner() {
   const params = useSearchParams();
   const q = params.get("q") ?? "";
   const [data, setData] = useState<SearchResponse | null>(null);
@@ -92,6 +94,14 @@ export default function SearchPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function SearchPage() {
+  return (
+    <Suspense fallback={<div className="text-[var(--color-ink-500)]">Загружаю…</div>}>
+      <SearchInner />
+    </Suspense>
   );
 }
 
