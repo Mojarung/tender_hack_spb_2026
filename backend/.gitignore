@@ -12,3 +12,6 @@ htmlcov/
 dist/
 build/
 .DS_Store
+
+# smoke / debug artifacts
+smoke_result.json

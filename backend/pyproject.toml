@@ -17,38 +17,48 @@ dependencies = [
     "pydantic-settings>=2.7",
     # ===== HTTP (cascading L1 of anti-bot stack) =====
     "httpx[http2]>=0.28",
-    "curl-cffi>=0.15.0",      # TLS impersonation (chrome131, firefox127), HTTP/2+3
-    "primp>=1.2.2",           # Rust-bindings alternative with stronger JA4 coverage
+    "curl-cffi>=0.7",           # TLS impersonation (chrome131), HTTP/2+3
     "tenacity>=9.0",
-    # ===== Browser-based stealth (L2) =====
-    "patchright>=1.60.0",     # Chromium CDP-stealth — Ozon, generic
-    "camoufox[geoip]>=0.4.11", # Firefox C++ stealth + BrowserForge — Yandex Market
-    "nodriver>=0.50.0",       # fallback Chromium
-    "humancursor>=1.1.5",     # bezier mouse paths for slider captchas
-    # ===== Search & extraction (4th, non-formalized source) =====
-    "crawl4ai>=0.8.0",        # OSS Playwright-based scraper with LLM extract
-    "firecrawl-py>=2.0",      # fallback / hosted free tier
-    # ===== CAPTCHA solver =====
-    "twocaptcha-python>=1.4", # accepts roubles — paid fallback (only kaleidoscope)
-    "opencv-python-headless>=4.10",  # slider / puzzle solver, no LLM needed
+    # ===== 4-th source =====
+    "firecrawl-py>=2.0",
     # ===== Storage =====
     "redis>=5.2",
     "arq>=0.26",
     "asyncpg>=0.30",
     "sqlalchemy[asyncio]>=2.0.36",
     "alembic>=1.14",
-    "aioboto3>=13.0",         # S3 / MinIO async client
-    # ===== NLP / sentiment / fuzzy =====
-    "pymorphy3>=2.0",
+    "aioboto3>=13.0",
+    # ===== NLP / fuzzy =====
     "rapidfuzz>=3.10",
-    "symspellpy>=6.7",
-    "transformers>=4.46",     # for seara/rubert-tiny2-russian-sentiment
-    "torch>=2.5",
     # ===== Observability =====
     "prometheus-fastapi-instrumentator>=7.1",
     "prometheus-client>=0.22",
     "structlog>=24.4",
     "orjson>=3.10",
+]
+
+[project.optional-dependencies]
+# Heavier stealth stack — installed only when actively driving real
+# browsers (otherwise we don't need them). Pin loosely; lock them at
+# integration time via `uv add patchright camoufox` etc.
+stealth = [
+    "patchright",
+    "camoufox",
+    "nodriver",
+    "humancursor",
+]
+# Russian NLP / sentiment — adds ~1.5 GB of torch wheels, install on demand.
+nlp = [
+    "pymorphy3>=2.0",
+    "symspellpy>=6.7",
+    "transformers>=4.46",
+    "torch>=2.5",
+]
+# CAPTCHA solving (only used if FEATURE_USE_2CAPTCHA=true).
+captcha = [
+    "2captcha-python>=1.5",
+    "opencv-python-headless>=4.10",
+    "primp>=0.6",
 ]
 
 [dependency-groups]
@@ -79,15 +89,15 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = [
-    "E", "F", "W",  # pyflakes / pycodestyle
-    "I",            # isort
-    "N",            # pep8-naming
-    "UP",           # pyupgrade
-    "B",            # bugbear
-    "ASYNC",        # async best practices
-    "S",            # bandit security
-    "C4",           # comprehensions
-    "RUF",          # ruff-specific
+    "E", "F", "W",
+    "I",
+    "N",
+    "UP",
+    "B",
+    "ASYNC",
+    "S",
+    "C4",
+    "RUF",
 ]
 ignore = ["S101"]
 
