@@ -1,6 +1,6 @@
 # PricePulse — Архитектура backend
 
-Версия 0.1, 2026-05-21. Источники требований: [tz.md](../tz.md), [product.md](../product.md).
+Версия 0.2, 2026-05-21. Источники требований: [tz.md](../tz.md), [product.md](../product.md). Anti-bot стратегия — отдельным документом: [docs/anti-bot.md](./docs/anti-bot.md).
 
 ---
 
@@ -95,6 +95,15 @@
 | Линт/тайпчек | **ruff** + **mypy --strict** | |
 | Контейнеризация | Docker, docker compose | стандарт демо |
 | Поиск (4-й источник) | **Firecrawl** (self-host) + **SearXNG** | бесплатный мета-поиск Рунета + LLM-ready markdown |
+| OSS-crawler (4-й источник, основной) | **Crawl4AI** 0.8 | Playwright-based, LLM-extract, полный контроль над прокси/stealth |
+| TLS impersonation (L1) | **curl_cffi** 0.15+ | обход JA3/JA4-детекта, HTTP/2+3 |
+| Browser stealth (L2) | **Patchright** 1.60 + **Camoufox** 150 | для Ozon (Chromium CDP) и Я.Маркета (Firefox C++) |
+| L3 fallback (free tiers) | **Scrapfly** + **Apify** + **ZenRows** | по 1 key на провайдера, регистрируем заранее |
+| Image cache | **MinIO** (S3-API) | устойчивость к ребрендингу basket-CDN, унифицированный CDN |
+| Sentiment RU | **seara/rubert-tiny2** (HF) | 3 ms/text на CPU, 12M params |
+| Метрики | **Prometheus 3** + **Grafana 11** + **node-exporter** + **cAdvisor** | RED + scrape-specific + cost-tracking |
+| FastAPI instrumentation | **prometheus-fastapi-instrumentator** 7.1 | RED-метрики из коробки |
+| Orchestration/alerts | **n8n** 2.18 | визуальный live-view + Telegram-алерты + schedules |
 
 ---
 
@@ -343,7 +352,40 @@ class ScraperProtocol(Protocol):
 - Аутентификация / пользователи.
 - Запись в zakupki.mos.ru.
 - Мобильное приложение.
-- ML-ранжирование между источниками (стартуем с эвристик: совпадение токенов + цена в пределах ±30% от медианы).
+- ML-ранжирование между источниками (стартуем с эвристик в [analytics/scoring.py](./src/pricepulse/analytics/scoring.py): Best-Deal Score).
+
+---
+
+## 15. Расширения relative к v0.1
+
+Новые компоненты после ресёрча 21.05.2026 (см. [docs/anti-bot.md](./docs/anti-bot.md)):
+
+1. **L1→L4 cascade-router** ([antibot/cascade.py](./src/pricepulse/antibot/cascade.py)) — каждая источник-цепочка имеет circuit-breakers и cost-cap.
+2. **Image cache на MinIO** — собственная S3-совместимая копия картинок, чтобы не зависеть от basket-CDN-перешардивания у WB.
+3. **Prometheus + Grafana** — `/metrics` через `prometheus-fastapi-instrumentator` + bounded-cardinality кастомные метрики, дашборд «Live Scraping» — главный wow-артефакт для жюри.
+4. **n8n как visibility layer** — live execution view парсинга + Telegram-алерты + auto-fallback workflow. Не заменяет arq (он остаётся для in-process тяжёлой работы) — n8n снаружи.
+5. **Аналитика для жюри** — sentiment ([analytics/sentiment.py](./src/pricepulse/analytics/sentiment.py)) на `seara/rubert-tiny2` + Best-Deal Score ([analytics/scoring.py](./src/pricepulse/analytics/scoring.py)) + история цен через `wbx-content-v2.wbstatic.net/price-history`.
+6. **Megamarket** ([scrapers/megamarket.py](./src/pricepulse/scrapers/megamarket.py)) — дефолтный кандидат для 4-го источника (мульти-категория, без капчи).
+7. **Crawl4AI** вместо/в дополнение к Firecrawl для 4-го источника — полный контроль над fingerprint и прокси, LLM-extract через Gemini 3 Flash или DeepSeek V4 Flash.
+8. **Free-tier ключи** для L3-fallback: Scrapfly (1000 кредитов навсегда), Apify ($5/мес forever), ZenRows (14d trial + 40 protected). Регистрируем заранее.
+9. **2Captcha** как L4 для Yandex SmartCaptcha — единственный солвер с оплатой в рублях через QIWI.
+10. **Cost guard** на $50/24ч — auto-disable L3+L4 при превышении (`COST_CAP_USD` в env).
+
+---
+
+## 16. Расширения v0.3 — local LLM + ops (21.05.2026)
+
+Полный документ: [docs/local-llm-and-ops.md](./docs/local-llm-and-ops.md). Кратко:
+
+1. **Ollama + Gemma 4** ([antibot/vlm_solver.py](./src/pricepulse/antibot/vlm_solver.py)) — локальный multimodal VLM для CAPTCHA (OCR + silhouettes). `gemma4:e4b` = 5 GB Q4, MMMU Pro 76.9%, 30 tok/s на CPU. **Заменяет ~80% платных вызовов 2Captcha.**
+2. **OpenCV slider-solver** ([antibot/slider_solver.py](./src/pricepulse/antibot/slider_solver.py)) — порт vsmutok/PuzzleCaptchaSolver, ~50 ms на CPU, WR ≥95% на Ozon slider. Бесплатно, без LLM.
+3. **ntfy + Apprise** ([notifications.py](./src/pricepulse/notifications.py)) — self-hosted push на телефон + fan-out (Telegram/Discord/email).
+4. **pgAdmin** на :5050 — Postgres web UI.
+5. **Dozzle** на :8888 — live логи всех контейнеров в браузере.
+6. **Uptime Kuma** на :3001 — внешний uptime + публичный status page.
+7. **GlitchTip** на :8001 — Sentry-compatible error tracking (self-hosted).
+8. **Homepage** на :3030 — единый admin landing-портал (`backend/homepage/services.yaml`).
+9. **Fallback admin** на FastAPI `/admin` ([admin/index.html](./admin/index.html)) — на случай если Homepage не поднялся.
 
 ---
 

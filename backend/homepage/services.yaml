@@ -1,0 +1,90 @@
+---
+- Core:
+    - PricePulse API:
+        href: http://localhost:8000/docs
+        description: FastAPI OpenAPI
+        icon: fastapi.png
+    - n8n:
+        href: http://localhost:5678
+        description: Orchestration / live demo board
+        icon: n8n.png
+    - Firecrawl:
+        href: http://localhost:3002
+        description: Self-hosted scraper + search
+        icon: firecrawl.png
+    - SearXNG:
+        href: http://localhost:8080
+        description: Free meta-search engine
+        icon: searxng.png
+
+- Observability:
+    - Grafana:
+        href: http://localhost:3000
+        description: Live Scraping dashboard
+        icon: grafana.png
+    - Prometheus:
+        href: http://localhost:9090
+        description: Metrics TSDB
+        icon: prometheus.png
+    - Dozzle:
+        href: http://localhost:8888
+        description: Live container logs
+        icon: dozzle.png
+    - Uptime Kuma:
+        href: http://localhost:3001
+        description: External uptime + status page
+        icon: uptime-kuma.png
+    - GlitchTip:
+        href: http://localhost:8001
+        description: Sentry-compatible error tracking
+        icon: glitchtip.png
+    - ntfy:
+        href: http://localhost:8090
+        description: Push notifications (mobile)
+        icon: ntfy.png
+    - Apprise:
+        href: http://localhost:8082
+        description: Multi-channel notification router
+        icon: apprise.png
+
+- Storage:
+    - pgAdmin:
+        href: http://localhost:5050
+        description: Postgres web UI
+        icon: pgadmin.png
+    - MinIO Console:
+        href: http://localhost:9001
+        description: S3 image cache
+        icon: minio.png
+    - Redis:
+        href: redis://localhost:6379
+        description: Cache + arq queue
+        icon: redis.png
+
+- Anti-bot:
+    - Ollama:
+        href: http://localhost:11434
+        description: Local Gemma 4 vision LLM
+        icon: ollama.png
+    - 2Captcha:
+        href: https://2captcha.com/enterpage
+        description: External CAPTCHA fallback (RUB payments)
+        icon: si-2captcha
+    - Anti-bot strategy:
+        href: /docs/anti-bot
+        description: backend/docs/anti-bot.md
+        icon: si-markdown
+
+- Docs:
+    - ТЗ:
+        href: /docs/tz
+        description: Хакатонное положение
+        icon: si-readthedocs
+    - Architecture:
+        href: /docs/architecture
+        description: backend/ARCHITECTURE.md
+        icon: si-architecture
+    - Local LLM + Ops:
+        href: /docs/local-llm-and-ops
+        description: Gemma 4 + observability v2
+        icon: si-ollama

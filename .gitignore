@@ -219,3 +219,6 @@ __marimo__/
 
 # Claude Code local state
 .claude/
+
+# MCP config (contains secrets — use .mcp.json.example as template)
+.mcp.json

@@ -55,6 +55,27 @@
 - [ ] **Демонстрация работоспособности** — рабочее демо на площадке.
 - [ ] **BPMN-схема** — диаграмма потока обработки запроса (одна страница, экспорт PDF/SVG, кладём в `docs/bpmn.svg`).
 
+### 2.8 Free-mode по умолчанию
+
+- [ ] **Никаких платежей по дефолту** — `FEATURES_ALLOW_PAID=false` killswitch
+- [ ] **Oracle Cloud Free Tier** как proxy-пул (4 ARM cores + 24 GB RAM forever free)
+- [ ] **Gemma 4** локально через Ollama для CAPTCHA и LLM-extract (вместо платных Gemini/2Captcha)
+- [ ] **OpenCV slider-solver** — бесплатный, без LLM, WR ≥95% на Ozon slider
+- [ ] **Демо-режим** — прогрев Redis-кэша по 15 жюри-запросам, <100 ms ответ
+- [ ] **Все платные сервисы** включаются гранулярными флагами (`FEATURE_USE_2CAPTCHA`, etc.) — никаких сюрпризов в счёте
+
+Полный документ: [backend/docs/free-mode.md](./backend/docs/free-mode.md).
+
+### 2.9 Сверх-ТЗ: что добавляем для wow-эффекта на защите
+
+- [ ] **История цен в карточке** (sparkline) — для WB через публичный `wbx-content-v2.wbstatic.net/price-history`, для остальных — наш сбор за время хакатона.
+- [ ] **Sentiment-анализ отзывов** — `seara/rubert-tiny2-russian-sentiment` (3 ms/text на CPU), badge positive/neutral/negative.
+- [ ] **Best-Deal Score** — формула с UI-слайдерами весов, чтобы жюри могло «покрутить» прямо на демо.
+- [ ] **MinIO image cache** — отдаём картинки из своего S3, чтобы UI не моргал при ребрендинге basket-CDN.
+- [ ] **Prometheus + Grafana** — live-дашборд «Live Scraping» с метриками RPS / success rate / капчи / стоимость на 1000 запросов.
+- [ ] **n8n** — визуальный live-view парсинга + Telegram-алерты + auto-fallback workflow.
+- [ ] **Cost guard** — hard-cap $50/24ч с автоматическим отключением платных слоёв при превышении.
+
 ---
 
 ## 3. Артефакты к защите (24.05.2026, 13:00)
@@ -84,11 +105,13 @@
 
 | Риск | Митигация |
 |---|---|
-| Yandex SmartCaptcha на Маркете | Camoufox + резидентные прокси + 2captcha как fallback; кэш на 1–6 ч |
-| Ozon DataDome / антибот | Patchright (Chromium stealth на уровне CDP) + ротация прокси |
-| WB временные блокировки IP | Используем публичный `search.wb.ru/exactmatch/...` JSON + ротация UA + backoff |
-| Долгий «холодный» запрос (10+ сек) | Стриминг ответа через SSE; первые карточки приходят за 1–2 с из кэша или быстрого источника |
-| Дисквалификация по п. 7.5 (проект создан НЕ на хакатоне) | Каркас (этот репозиторий) — это инфраструктура (Dockerfile, layout, ARCHITECTURE.md); вся доменная логика пишется в окне хакатона |
+| Yandex SmartCaptcha на Маркете | Camoufox + warm `spravka` cookies + RU residential + 2captcha (рубли); кэш 6 ч |
+| Ozon Cloudflare + slider | Mobile composer-api с `ozonapp_android` UA через curl_cffi → Patchright fallback |
+| WB временные блокировки IP | `httpx.http2=True` без прокси для <5 RPS; curl_cffi(chrome131) + DC proxy при 429 |
+| Полная блокировка одного источника | Cascade L1→L2→L3→L4; circuit-breaker; кэш Redis + MinIO; никогда не валит запрос целиком |
+| Превышение бюджета на капчи/прокси | Cost guard $50/24ч; Prometheus counter; авто-disable L3+L4 при превышении |
+| Долгий «холодный» запрос (10+ сек) | SSE streaming; первые карточки приходят за 1–2 с из Redis-кэша |
+| Дисквалификация по п. 7.5 (проект создан НЕ на хакатоне) | Этот репозиторий — только инфраструктура: Dockerfile, ARCHITECTURE.md, anti-bot.md, конфиги. Вся доменная логика пишется в окне 22.05 21:00 — 25.05 13:00. |
 
 ---
 

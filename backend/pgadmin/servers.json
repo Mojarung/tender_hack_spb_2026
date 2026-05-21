@@ -1,0 +1,14 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "pricepulse",
+      "Group": "Servers",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "pricepulse",
+      "Username": "pricepulse",
+      "SSLMode": "prefer",
+      "Comment": "PricePulse main DB"
+    }
+  }
+}

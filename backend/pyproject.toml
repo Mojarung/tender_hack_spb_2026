@@ -8,37 +8,47 @@ license = { text = "MIT" }
 authors = [{ name = "PricePulse team" }]
 
 dependencies = [
-    # Web framework
+    # ===== Web framework =====
     "fastapi>=0.128",
     "uvicorn[standard]>=0.34",
     "sse-starlette>=2.1",
-    # Validation / settings
+    # ===== Validation / settings =====
     "pydantic>=2.10",
     "pydantic-settings>=2.7",
-    # HTTP
+    # ===== HTTP (cascading L1 of anti-bot stack) =====
     "httpx[http2]>=0.28",
+    "curl-cffi>=0.15.0",      # TLS impersonation (chrome131, firefox127), HTTP/2+3
+    "primp>=1.2.2",           # Rust-bindings alternative with stronger JA4 coverage
     "tenacity>=9.0",
-    # Browser-based scraping (stealth)
-    "patchright>=1.50",
-    "camoufox[geoip]>=0.4",
-    # Search & extraction (4th, non-formalized source)
-    "firecrawl-py>=2.0",
-    # CAPTCHA solver (Yandex SmartCaptcha)
-    "twocaptcha-python>=1.4",
-    # Storage
+    # ===== Browser-based stealth (L2) =====
+    "patchright>=1.60.0",     # Chromium CDP-stealth — Ozon, generic
+    "camoufox[geoip]>=0.4.11", # Firefox C++ stealth + BrowserForge — Yandex Market
+    "nodriver>=0.50.0",       # fallback Chromium
+    "humancursor>=1.1.5",     # bezier mouse paths for slider captchas
+    # ===== Search & extraction (4th, non-formalized source) =====
+    "crawl4ai>=0.8.0",        # OSS Playwright-based scraper with LLM extract
+    "firecrawl-py>=2.0",      # fallback / hosted free tier
+    # ===== CAPTCHA solver =====
+    "twocaptcha-python>=1.4", # accepts roubles — paid fallback (only kaleidoscope)
+    "opencv-python-headless>=4.10",  # slider / puzzle solver, no LLM needed
+    # ===== Storage =====
     "redis>=5.2",
     "arq>=0.26",
     "asyncpg>=0.30",
     "sqlalchemy[asyncio]>=2.0.36",
     "alembic>=1.14",
-    # NLP / fuzzy
+    "aioboto3>=13.0",         # S3 / MinIO async client
+    # ===== NLP / sentiment / fuzzy =====
     "pymorphy3>=2.0",
     "rapidfuzz>=3.10",
     "symspellpy>=6.7",
-    # Observability
+    "transformers>=4.46",     # for seara/rubert-tiny2-russian-sentiment
+    "torch>=2.5",
+    # ===== Observability =====
+    "prometheus-fastapi-instrumentator>=7.1",
+    "prometheus-client>=0.22",
     "structlog>=24.4",
     "orjson>=3.10",
-    "prometheus-client>=0.21",
 ]
 
 [dependency-groups]
@@ -79,7 +89,7 @@ select = [
     "C4",           # comprehensions
     "RUF",          # ruff-specific
 ]
-ignore = ["S101"]  # pytest uses assert
+ignore = ["S101"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S105", "S106", "S311"]

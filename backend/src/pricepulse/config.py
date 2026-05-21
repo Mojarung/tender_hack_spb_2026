@@ -36,9 +36,53 @@ class Settings(BaseSettings):
 
     twocaptcha_api_key: str = ""
 
-    firecrawl_url: str = "http://firecrawl-api:3002"
+    # L3 fallback — foreign services (free tiers)
+    scrapfly_api_key: str = ""
+    apify_api_token: str = ""
+    zenrows_api_key: str = ""
     firecrawl_api_key: str = ""
+
+    firecrawl_url: str = "http://firecrawl-api:3002"
     searxng_url: str = "http://searxng:8080"
+
+    # LLM extraction for the 4th source
+    gemini_api_key: str = ""
+    deepseek_api_key: str = ""
+
+    # S3 / MinIO — image cache
+    s3_endpoint_url: str = "http://minio:9000"
+    s3_access_key: str = "pricepulse"
+    s3_secret_key: str = "pricepulse_dev_password"
+    s3_bucket: str = "pricepulse-images"
+    s3_region: str = "us-east-1"
+
+    # Local LLM (Gemma 4 via Ollama)
+    ollama_url: str = "http://ollama:11434"
+    ollama_vision_model: str = "gemma4:e4b"
+
+    # Notifications
+    ntfy_url: str = "http://ntfy/pricepulse-alerts"
+    apprise_url: str = "http://apprise:8000/notify/pricepulse"
+
+    # Admin services
+    pgadmin_password: str = "hackathon"
+    glitchtip_secret_key: str = ""
+
+    # ===== Feature flags (free-mode by default) =====
+    # Global killswitch. If false, no paid branch is ever taken.
+    features_allow_paid: bool = False
+    # Granular flags — only effective when allow_paid is true.
+    feature_use_paid_proxies: bool = False
+    feature_use_2captcha: bool = False
+    feature_use_paid_llm: bool = False
+    feature_use_paid_l3: bool = False
+
+    # Demo mode — pre-warm Redis cache for jury-known queries so live demo
+    # is sub-100ms with no risk of bans.
+    demo_mode: bool = False
+
+    # Cost guard (USD hard-cap for 24h of L3 + L4). $0 in free-mode.
+    cost_cap_usd: int = 0
 
     @property
     def postgres_dsn(self) -> str:
