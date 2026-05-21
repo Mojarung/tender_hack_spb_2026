@@ -1,107 +1,92 @@
-"""RU↔EN product-term thesaurus.
+"""RU brand thesaurus for `normalize_query`.
 
-Curated by hand — covers the categories we expect to see on a price-
-search hackathon demo. Keys MUST be lowercase. The right-hand side is
-the canonical form we'd rather send to a marketplace (English usually
-gives better recall on WB/Ozon because their search index treats Latin
-brand tokens as primary).
+Strategy: the marketplaces we hit (WB / Ozon / Я.Маркет / Megamarket)
+are Russian and index Russian descriptions as primary. So we DO NOT
+translate generic nouns like "наушники", "пылесос", "кроссовки" — they
+already work and translating them hurts recall.
 
-Add a row, get instant coverage for:
-  - direct lookup ("айфон" → "iphone")
-  - fuzzy match ("айвон" → "iphone" via rapidfuzz)
+We only canonicalise brand names that consumers spell phonetically:
+"айфон" → "iphone", "сяоми" → "xiaomi", etc. Both the Latin and the
+cyrillic phonetic spellings live as keys for fuzzy correction.
 """
 
 from __future__ import annotations
 
-# Single-token translit (used for substitution inside multi-word queries).
+# Per-token brand normalisations (cyrillic → canonical Latin form).
 TRANSLIT: dict[str, str] = {
-    # phones / tablets
-    "айфон": "iphone",
-    "айфона": "iphone",
-    "айфоны": "iphone",
-    "айфоне": "iphone",
-    "iphonе": "iphone",   # cyrillic 'е' typo
-    "айпад": "ipad",
-    "айпэд": "ipad",
-    "самсунг": "samsung",
-    "ксиоми": "xiaomi",
-    "сяоми": "xiaomi",
-    "хуавей": "huawei",
+    # phones / tablets — Apple
+    "айфон": "iphone", "айфона": "iphone", "айфоны": "iphone",
+    "айфоне": "iphone", "айфонов": "iphone", "айфончик": "iphone",
+    "iphonе": "iphone",       # cyrillic 'е' typo
+    "айпад": "ipad", "айпэд": "ipad",
+
+    # phones / tablets — Android
+    "самсунг": "samsung", "самсунга": "samsung",
+    "сяоми": "xiaomi", "ксяоми": "xiaomi", "ксиоми": "xiaomi", "шаоми": "xiaomi",
+    "хуавей": "huawei", "хуавэй": "huawei",
+    "хонор": "honor",
+    "редми": "redmi",
+    "оппо": "oppo",
+
     # laptops
-    "макбук": "macbook",
-    "макбука": "macbook",
-    "ноутбук": "ноутбук",   # works fine in RU on WB
-    # audio
-    "наушники": "наушники",
-    "беспроводные наушники": "wireless headphones",
-    "колонка": "speaker",
+    "макбук": "macbook", "макбука": "macbook",
+    "асус": "asus",
+    "леново": "lenovo",
+    "хп": "hp",
+    "делл": "dell",
+
+    # audio brands
     "сони": "sony",
     "бозе": "bose",
-    "марашалл": "marshall",
-    "маршалл": "marshall",
-    # home appliances
-    "пылесос": "vacuum",
-    "робот пылесос": "robot vacuum",
-    "робот-пылесос": "robot vacuum",
-    "кофемашина": "coffee machine",
-    "кофеварка": "coffee maker",
-    "блендер": "blender",
-    "мультиварка": "multicooker",
-    "стиралка": "стиральная машина",
-    "сушилка": "сушильная машина",
-    # peripherals
-    "клавиатура": "keyboard",
-    "клава": "keyboard",
-    "мышка": "mouse",
-    "мышь": "mouse",
-    "монитор": "monitor",
-    "веб камера": "webcam",
-    # apparel / shoes
-    "кроссовки": "sneakers",
-    "кроссы": "sneakers",
+    "маршалл": "marshall", "марашалл": "marshall",
+    "джбл": "jbl",
+    "эйрподс": "airpods", "аирподс": "airpods", "аирпадс": "airpods",
+
+    # apparel / shoes brands
     "найк": "nike",
     "адидас": "adidas",
     "пума": "puma",
     "рибок": "reebok",
-    # consoles / games
-    "плойка": "playstation",
-    "плейстейшн": "playstation",
-    "ps5": "playstation 5",
-    "пс5": "playstation 5",
-    "xbox": "xbox",
-    "иксбокс": "xbox",
+    "нью бэлэнс": "new balance",
+
+    # consoles / games — brand-ish acronyms
+    "плейстейшн": "playstation", "плойка": "playstation",
+    "пс5": "playstation 5", "ps5": "playstation 5",
+    "пс4": "playstation 4", "ps4": "playstation 4",
+    "иксбокс": "xbox", "хбокс": "xbox",
     "свитч": "nintendo switch",
     "нинтендо": "nintendo",
 }
 
-# Full-phrase aliases — substitution wins over per-token translit.
+# Phrase aliases — applied BEFORE the per-token pass so multi-word
+# brands win over single-word fixes ("айфон 15 про" → "iphone 15 pro").
 PHRASES: dict[str, str] = {
-    "айфон 15": "iphone 15",
-    "айфон 15 про": "iphone 15 pro",
-    "айфон 15 про макс": "iphone 15 pro max",
-    "айфон 16": "iphone 16",
-    "макбук эир": "macbook air",
-    "макбук про": "macbook pro",
-    "робот пылесос": "robot vacuum",
-    "беспроводные наушники": "wireless headphones",
-    "наушники сони": "sony headphones",
-    "иксбокс сериес": "xbox series",
+    "айфон 15 про макс":  "iphone 15 pro max",
+    "айфон 16 про макс":  "iphone 16 pro max",
+    "айфон 15 про":       "iphone 15 pro",
+    "айфон 16 про":       "iphone 16 pro",
+    "айфон 15":           "iphone 15",
+    "айфон 16":           "iphone 16",
+    "макбук эйр":         "macbook air",
+    "макбук эир":         "macbook air",
+    "макбук про":         "macbook pro",
+    "эйрподс про":        "airpods pro",
+    "эйрподс макс":       "airpods max",
+    "иксбокс сериес":     "xbox series",
 }
 
-# Convenience flat list for fuzzy lookups.
+# Flat list for fuzzy lookups (rapidfuzz candidates).
 ALL_TERMS: tuple[str, ...] = tuple(
     sorted(set(list(TRANSLIT) + list(TRANSLIT.values()) + list(PHRASES)))
 )
 
 
 def translate(text: str) -> str:
-    """RU→EN substitution. Tries longest phrase match first, then word."""
+    """Apply phrase + per-token brand translit. Leaves generic RU words alone."""
     t = text.lower()
-    # Phrase pass — longest first so 'айфон 15 про' wins over 'айфон 15'.
     for phrase in sorted(PHRASES, key=len, reverse=True):
         if phrase in t:
             t = t.replace(phrase, PHRASES[phrase])
-    # Per-token translit.
     out: list[str] = []
     for tok in t.split():
         out.append(TRANSLIT.get(tok, tok))

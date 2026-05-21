@@ -22,9 +22,18 @@ async def test_ru_to_en_phrase_translation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ru_to_en_single_token() -> None:
+async def test_ru_to_en_keeps_generic_nouns() -> None:
+    """We only canonicalise brand names; 'кроссовки' / 'наушники' / 'пылесос'
+    stay in Russian because the RU marketplaces index them natively."""
     n = await normalize_query("кроссовки найк")
-    assert n.normalized == "sneakers nike"
+    assert n.normalized == "кроссовки nike"
+
+    n = await normalize_query("наушники сони")
+    assert n.normalized == "наушники sony"
+
+    n = await normalize_query("пылесос")
+    assert n.normalized == "пылесос"
+    assert n.expansions == []
 
 
 @pytest.mark.asyncio
