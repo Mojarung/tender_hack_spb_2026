@@ -1,9 +1,16 @@
 export type Source = "wb" | "ozon" | "ya_market" | "runet";
 
+export const SOURCE_LABEL: Record<Source, string> = {
+  wb: "Wildberries",
+  ozon: "Ozon",
+  ya_market: "Я.Маркет",
+  runet: "Рунет",
+};
+
 export interface ProductOffer {
   source: Source;
   name: string;
-  price: string;          // decimal serialised as string
+  price: string;
   currency: string;
   url: string;
   image: string | null;
@@ -24,17 +31,8 @@ export interface SourceGroup {
   error?: string | null;
 }
 
-export interface NormalizedQuery {
-  raw: string;
-  normalized: string;
-  expansions: string[];
-}
-
-export interface RankedOffer {
-  offer: ProductOffer;
-  score: number;
-  rank: number;
-}
+export interface NormalizedQuery { raw: string; normalized: string; expansions: string[]; }
+export interface RankedOffer { offer: ProductOffer; score: number; rank: number; }
 
 export interface SearchResponse {
   query: NormalizedQuery;
@@ -63,46 +61,6 @@ export interface User {
   is_superuser: boolean;
   is_verified: boolean;
   display_name: string | null;
-}
-
-export interface SentimentBreakdown {
-  total: number;
-  positive: number;
-  neutral: number;
-  negative: number;
-  positive_pct: number;
-  neutral_pct: number;
-  negative_pct: number;
-}
-
-export interface SentimentResponse {
-  source: Source;
-  item_id: number;
-  available: boolean;
-  feedbacks_seen: number;
-  breakdown: SentimentBreakdown;
-  quotes: {
-    positive: SentimentQuote[];
-    neutral: SentimentQuote[];
-    negative: SentimentQuote[];
-  };
-}
-
-export interface SentimentQuote {
-  text: string;
-  rating: number;
-  votes_plus: number;
-  created: string;
-  score: number;
-}
-
-export interface PricePoint { ts: string; price: string; }
-
-export interface PriceHistoryResponse {
-  source: Source;
-  item_id: string;
-  count: number;
-  points: PricePoint[];
 }
 
 export interface ChatResponse {

@@ -1,86 +1,97 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
-import { Bell, Heart, Search, Settings, SlidersHorizontal, User as UserIcon } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { motion } from "framer-motion";
+import { Heart, LogOut, Search, User as UserIcon } from "lucide-react";
 
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth-hook";
+
+function SearchBox() {
+  const router = useRouter();
+  const params = useSearchParams();
+  const [q, setQ] = useState(params.get("q") ?? "");
+
+  useEffect(() => { setQ(params.get("q") ?? ""); }, [params]);
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!q.trim()) return;
+        router.push(`/search?q=${encodeURIComponent(q.trim())}`);
+      }}
+      className="flex-1 max-w-[640px] relative"
+    >
+      <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--color-ink-4)]" />
+      <input
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        placeholder="iphone 15, macbook, кофемашина..."
+        className="input pl-11 pr-4 py-2.5 text-sm rounded-full"
+      />
+    </form>
+  );
+}
 
 export function Header() {
   const router = useRouter();
-  const [q, setQ] = useState("");
-  const [user, setUser] = useState<{ email: string; display_name?: string | null } | null>(null);
-
-  useEffect(() => {
-    api.auth.me().then((u) => setUser(u)).catch(() => setUser(null));
-  }, []);
-
-  function submit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!q.trim()) return;
-    router.push(`/search?q=${encodeURIComponent(q.trim())}`);
-  }
+  const { user, loading } = useAuth();
 
   return (
-    <header className="bg-white border-b border-[var(--color-ink-100)]">
-      <div className="max-w-[1240px] mx-auto px-6 py-4 flex items-center gap-6">
-        <Link href="/" className="text-2xl font-bold text-[var(--color-brand-500)] tracking-tight">
-          PricePulse
+    <motion.header
+      initial={{ y: -16, opacity: 0 }}
+      animate={{ y: 0, opacity: 1 }}
+      transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+      className="sticky top-0 z-30 bg-[color:var(--color-bg)]/85 backdrop-blur border-b border-[var(--color-line)]"
+    >
+      <div className="max-w-[1240px] mx-auto px-6 h-16 flex items-center gap-6">
+        <Link href="/" className="flex items-center gap-2 group">
+          <span className="w-8 h-8 rounded-xl bg-[var(--color-ink)] grid place-items-center text-white font-bold text-sm transition-transform group-hover:scale-105">
+            P
+          </span>
+          <span className="font-semibold tracking-tight">PricePulse</span>
         </Link>
 
-        <form onSubmit={submit} className="flex-1 max-w-[600px] relative">
-          <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[var(--color-ink-400)]" />
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Поиск товара по маркетплейсам..."
-            className="w-full pl-12 pr-12 py-3 rounded-[40px] border border-[var(--color-ink-200)]
-                       focus:outline-none focus:border-[var(--color-brand-400)] bg-white"
-          />
-          <button
-            type="button"
-            className="absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-md hover:bg-[var(--color-ink-50)]"
-          >
-            <SlidersHorizontal className="w-4 h-4 text-[var(--color-ink-500)]" />
-          </button>
-        </form>
+        <Suspense fallback={<div className="flex-1" />}>
+          <SearchBox />
+        </Suspense>
 
         <nav className="flex items-center gap-2">
-          <Link
-            href="/favorites"
-            className="p-3 rounded-full border border-[var(--color-ink-100)] hover:border-[var(--color-brand-400)] transition-colors"
-            aria-label="Избранное"
-          >
-            <Heart className="w-5 h-5 text-[var(--color-ink-700)]" />
+          <Link href="/favorites" className="btn btn-ghost !py-2 !px-3 rounded-full" aria-label="Избранное">
+            <Heart className="w-4 h-4" />
           </Link>
-          <button
-            className="relative p-3 rounded-full border border-[var(--color-ink-100)] hover:border-[var(--color-brand-400)]"
-            aria-label="Уведомления"
-          >
-            <Bell className="w-5 h-5 text-[var(--color-ink-700)]" />
-            <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-[var(--color-error)]" />
-          </button>
-          <button
-            className="p-3 rounded-full border border-[var(--color-ink-100)] hover:border-[var(--color-brand-400)]"
-            aria-label="Настройки"
-          >
-            <Settings className="w-5 h-5 text-[var(--color-ink-700)]" />
-          </button>
-          {user ? (
-            <Link
-              href="/favorites"
-              className="ml-2 w-11 h-11 rounded-full bg-[var(--color-brand-500)] text-white flex items-center justify-center font-semibold"
-            >
-              {(user.display_name || user.email)[0]?.toUpperCase()}
-            </Link>
+          {loading ? (
+            <div className="w-9 h-9 rounded-full bg-[var(--color-surface-2)] animate-pulse" />
+          ) : user ? (
+            <div className="flex items-center gap-2">
+              <div className="hidden md:block text-right">
+                <div className="text-xs text-[var(--color-ink-4)] leading-none">{user.display_name ?? "Привет"}</div>
+                <div className="text-xs text-[var(--color-ink-3)] truncate max-w-[140px]">{user.email}</div>
+              </div>
+              <button
+                onClick={() => { api.auth.logout(); router.push("/"); }}
+                className="btn btn-ghost !p-2 rounded-full"
+                aria-label="Выйти"
+                title="Выйти"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            </div>
           ) : (
-            <Link href="/login" className="ml-2 btn-primary !rounded-full">
-              <span className="flex items-center gap-2"><UserIcon className="w-4 h-4" /> Войти</span>
-            </Link>
+            <>
+              <Link href="/login" className="btn btn-ghost !py-2 rounded-full hidden sm:inline-flex">
+                <UserIcon className="w-4 h-4" /> Войти
+              </Link>
+              <Link href="/register" className="btn btn-primary !py-2 rounded-full">
+                Создать аккаунт
+              </Link>
+            </>
           )}
         </nav>
       </div>
-    </header>
+    </motion.header>
   );
 }

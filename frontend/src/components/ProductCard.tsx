@@ -1,45 +1,48 @@
 "use client";
 
-import { Heart, Star } from "lucide-react";
-import { useState } from "react";
 import clsx from "clsx";
+import { motion } from "framer-motion";
+import { ArrowUpRight, Heart, Star } from "lucide-react";
+import { useState } from "react";
+import toast from "react-hot-toast";
 
-import { api } from "@/lib/api";
-import type { ProductOffer } from "@/lib/types";
+import { api, getToken } from "@/lib/api";
+import { formatPrice, itemIdFromOffer } from "@/lib/format";
+import { SOURCE_LABEL, type ProductOffer } from "@/lib/types";
 
-const SOURCE_LABEL: Record<string, string> = {
-  wb: "WB",
-  ozon: "Ozon",
-  ya_market: "Маркет",
-  runet: "Рунет",
+const sourceClass: Record<string, string> = {
+  wb: "source-dot-wb",
+  ozon: "source-dot-ozon",
+  ya_market: "source-dot-ya_market",
+  runet: "source-dot-runet",
 };
 
-function formatPrice(p: string, currency: string) {
-  const n = Number(p);
-  if (!Number.isFinite(n)) return p;
-  const formatted = n.toLocaleString("ru-RU", { maximumFractionDigits: 0 });
-  return currency === "RUB" ? `${formatted} ₽` : `${formatted} ${currency}`;
+interface Props {
+  offer: ProductOffer;
+  index?: number;
+  highlight?: boolean;   // best deal accent
 }
 
-function itemIdFromUrl(o: ProductOffer): string {
-  if (o.source === "wb") {
-    const m = o.url.match(/catalog\/(\d+)/);
-    return m?.[1] ?? "";
-  }
-  return o.url;
-}
-
-export function ProductCard({ offer }: { offer: ProductOffer }) {
+export function ProductCard({ offer, index = 0, highlight }: Props) {
   const [fav, setFav] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [imgFailed, setImgFailed] = useState(false);
 
-  async function toggleFav() {
+  const rating = offer.rating ?? Number(offer.characteristics?.rating ?? 0);
+  const feedbacks = offer.characteristics?.feedbacks;
+
+  async function toggleFav(e: React.MouseEvent) {
+    e.preventDefault();
     if (busy) return;
+    if (!getToken()) {
+      toast("Сначала войдите, чтобы сохранять", { icon: "🔒" });
+      return;
+    }
     setBusy(true);
     try {
       await api.favorites.add({
         source: offer.source,
-        item_id: itemIdFromUrl(offer),
+        item_id: itemIdFromOffer(offer),
         name: offer.name,
         price: offer.price,
         currency: offer.currency,
@@ -47,85 +50,95 @@ export function ProductCard({ offer }: { offer: ProductOffer }) {
         image: offer.image,
       });
       setFav(true);
-    } catch {
-      window.location.href = "/login";
+      toast.success("Добавлено в избранное");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message.slice(0, 80) : "не вышло");
     } finally {
       setBusy(false);
     }
   }
 
-  const reviews = offer.characteristics?.feedbacks;
-  const rating = offer.rating ?? Number(offer.characteristics?.rating ?? 0);
-
   return (
-    <div className="card p-5 flex flex-col gap-3 h-full">
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex-1 min-w-0">
-          <div className={clsx("badge-source", `badge-source-${offer.source}`)}>
-            {SOURCE_LABEL[offer.source] ?? offer.source}
-          </div>
-          <h3 className="mt-2 text-base font-semibold text-[var(--color-ink-900)] truncate">
-            {offer.name}
-          </h3>
-          {offer.seller && (
-            <p className="text-xs text-[var(--color-ink-400)] mt-0.5">{offer.seller}</p>
-          )}
+    <motion.a
+      href={offer.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      initial={{ opacity: 0, y: 14 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: Math.min(index * 0.04, 0.4), duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+      className={clsx(
+        "card card-hover p-4 flex flex-col gap-3 h-full group relative",
+        highlight && "ring-1 ring-[var(--color-accent-100)]"
+      )}
+    >
+      {/* Source + favorite */}
+      <div className="flex items-center justify-between">
+        <div className="chip">
+          <span className={clsx("source-dot", sourceClass[offer.source])} />
+          {SOURCE_LABEL[offer.source]}
+          {offer.cached && <span className="text-[var(--color-ink-4)]">· кэш</span>}
         </div>
         <button
           onClick={toggleFav}
-          aria-label="В избранное"
-          className="p-2 -m-2 disabled:opacity-50"
           disabled={busy}
+          aria-label="В избранное"
+          className="p-1.5 -m-1.5 rounded-full hover:bg-[var(--color-surface-2)] transition-colors disabled:opacity-50"
         >
           <Heart
             className={clsx(
-              "w-5 h-5 transition-colors",
-              fav ? "fill-[var(--color-error)] stroke-[var(--color-error)]" : "stroke-[var(--color-ink-400)]",
+              "w-4 h-4 transition-all",
+              fav
+                ? "fill-[var(--color-bad)] stroke-[var(--color-bad)] scale-110"
+                : "stroke-[var(--color-ink-4)] group-hover:stroke-[var(--color-ink-2)]"
             )}
           />
         </button>
       </div>
 
-      {offer.image ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={offer.image}
-          alt={offer.name}
-          loading="lazy"
-          className="h-36 object-contain w-full"
-        />
-      ) : (
-        <div className="h-36 grid place-items-center bg-[var(--color-ink-50)] rounded-md text-[var(--color-ink-400)] text-xs">
-          без фото
-        </div>
-      )}
-
-      <div className="flex items-center gap-3 text-xs text-[var(--color-ink-500)]">
-        {rating > 0 && (
-          <span className="flex items-center gap-1">
-            <Star className="w-3.5 h-3.5 fill-[var(--color-warning)] stroke-[var(--color-warning)]" />
-            {rating.toFixed(1)}
-          </span>
-        )}
-        {reviews && <span>{reviews} отзывов</span>}
-        {offer.cached && <span className="text-[var(--color-brand-500)]">из кэша</span>}
-      </div>
-
-      <div className="flex items-end justify-between mt-auto pt-2">
-        <div>
-          <div className="text-xl font-bold text-[var(--color-ink-900)]">
-            {formatPrice(offer.price, offer.currency)}
+      {/* Image */}
+      <div className="h-32 grid place-items-center bg-[var(--color-surface-2)] rounded-lg overflow-hidden">
+        {offer.image && !imgFailed ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={offer.image}
+            alt={offer.name}
+            loading="lazy"
+            onError={() => setImgFailed(true)}
+            className="h-full max-w-full object-contain transition-transform duration-300 group-hover:scale-105"
+          />
+        ) : (
+          <div className="text-[var(--color-ink-4)] text-3xl font-semibold tracking-tight">
+            {offer.name.slice(0, 2).toUpperCase()}
           </div>
-        </div>
-        <a
-          href={offer.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="btn-primary text-sm !py-2 !px-3"
-        >
-          К товару
-        </a>
+        )}
       </div>
-    </div>
+
+      {/* Title + meta */}
+      <div className="flex-1 min-h-0">
+        <h3 className="text-sm font-semibold leading-snug line-clamp-2 text-[var(--color-ink)]">
+          {offer.name}
+        </h3>
+        <div className="mt-1.5 flex items-center gap-2 text-xs text-[var(--color-ink-4)]">
+          {rating > 0 && (
+            <span className="inline-flex items-center gap-1">
+              <Star className="w-3 h-3 fill-[var(--color-warn)] stroke-[var(--color-warn)]" />
+              {rating.toFixed(1)}
+            </span>
+          )}
+          {feedbacks && <span>· {feedbacks} отзывов</span>}
+          {offer.seller && <span className="truncate">· {offer.seller}</span>}
+        </div>
+      </div>
+
+      {/* Price + CTA */}
+      <div className="flex items-end justify-between pt-1">
+        <div className="text-lg font-semibold tabular-nums">
+          {formatPrice(offer.price, offer.currency)}
+        </div>
+        <span className="text-xs text-[var(--color-ink-4)] inline-flex items-center gap-1 group-hover:text-[var(--color-ink-2)] transition-colors">
+          К товару <ArrowUpRight className="w-3 h-3" />
+        </span>
+      </div>
+    </motion.a>
   );
 }

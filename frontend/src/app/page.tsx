@@ -1,49 +1,46 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { ArrowRight } from "lucide-react";
+import Link from "next/link";
+import { useEffect, useState } from "react";
+import { motion } from "framer-motion";
 
 import { Hero } from "@/components/Hero";
 import { ProductCard } from "@/components/ProductCard";
+import { GridSkeleton } from "@/components/Skeleton";
 import { api } from "@/lib/api";
 import { MOCK_OFFERS, MOCK_TOP_DEALS } from "@/lib/mock";
 import type { ProductOffer, RankedOffer, SearchResponse } from "@/lib/types";
 
-const DEMO_QUERIES = [
-  "iphone 15 128gb",
-  "macbook air m3",
-  "robot vacuum",
-  "беспроводные наушники",
+const PROMOTED: { title: string; q: string }[] = [
+  { title: "iPhone 15 128GB", q: "iphone 15 128gb" },
+  { title: "MacBook Air M3",  q: "macbook air m3" },
+  { title: "Sony WH-1000XM5", q: "sony wh-1000xm5" },
+  { title: "Робот-пылесос",   q: "робот пылесос" },
 ];
 
 export default function Home() {
+  const [query, setQuery] = useState(PROMOTED[0].q);
   const [data, setData] = useState<SearchResponse | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [query, setQuery] = useState(DEMO_QUERIES[0]);
   const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    setData(null);
-    setErr(null);
-    setLoading(true);
-    api.search(query, 4)
+    setData(null); setErr(null); setLoading(true);
+    api.search(query, 6)
       .then((r) => { if (!cancelled) { setData(r); setLoading(false); } })
-      .catch((e) => {
-        if (cancelled) return;
-        setErr(e instanceof Error ? e.message : "ошибка");
-        setLoading(false);
-      });
+      .catch((e) => { if (!cancelled) { setErr(String(e?.message ?? e)); setLoading(false); } });
     return () => { cancelled = true; };
   }, [query]);
 
-  // Merge live data with mock fallback so the layout reads correctly
-  // even before the backend resolves (or when sources are blocked).
-  const topDeals: RankedOffer[] = (data?.top_deals && data.top_deals.length > 0)
-    ? data.top_deals
+  const top: RankedOffer[] = (data?.top_deals?.length ?? 0) > 0
+    ? (data!.top_deals).slice(0, 4)
     : MOCK_TOP_DEALS;
-  const liveOffers = data?.groups?.flatMap((g) => g.offers) ?? [];
-  const recOffers: ProductOffer[] = liveOffers.length > 0 ? liveOffers : MOCK_OFFERS;
+
+  const live: ProductOffer[] = data?.groups?.flatMap((g) => g.offers) ?? [];
+  const recs: ProductOffer[] = live.length > 0 ? live.slice(0, 8) : MOCK_OFFERS;
+  const usingMock = (data?.top_deals?.length ?? 0) === 0;
 
   return (
     <div className="space-y-12">
@@ -53,51 +50,55 @@ export default function Home() {
         <SectionHeader
           title="Топ-предложения сегодня"
           subtitle={
-            data?.top_deals?.length
-              ? `Best-Deal Score · ответ за ${data.took_ms} мс`
-              : loading
-                ? "Загружаю реальную выдачу…"
-                : "Демо-данные (бэкенд молчит — показываю layout)"
+            loading
+              ? "Идёт поиск…"
+              : usingMock
+                ? "Демо-данные — бэкенд молчит или временно ограничен"
+                : `Best-Deal Score · ответ за ${data?.took_ms} мс`
           }
         />
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-5 mt-6">
-          {topDeals.slice(0, 4).map((d) => (
-            <ProductCard key={`${d.offer.source}-${d.rank}`} offer={d.offer} />
-          ))}
-        </div>
+        {loading ? (
+          <GridSkeleton count={4} />
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {top.map((d, i) => (
+              <ProductCard key={`${d.offer.source}-${d.rank}-${i}`} offer={d.offer} index={i} highlight={i === 0} />
+            ))}
+          </div>
+        )}
       </section>
 
       <section>
-        <SectionHeader
-          title="Рекомендации"
-          subtitle={`Выдача по запросу «${query}»`}
-        />
+        <SectionHeader title="Подборки" subtitle="Один клик — мгновенный поиск" />
         <div className="flex gap-2 mt-3 flex-wrap">
-          {DEMO_QUERIES.map((q) => (
-            <button
-              key={q}
-              onClick={() => setQuery(q)}
-              className={
-                q === query
-                  ? "px-3 py-1.5 rounded-full bg-[var(--color-brand-500)] text-white text-sm"
-                  : "px-3 py-1.5 rounded-full bg-white border border-[var(--color-ink-200)] text-sm hover:border-[var(--color-brand-400)]"
-              }
+          {PROMOTED.map((p) => (
+            <motion.button
+              key={p.q}
+              whileTap={{ scale: 0.96 }}
+              onClick={() => setQuery(p.q)}
+              className={p.q === query ? "chip chip-active" : "chip"}
             >
-              {q}
-            </button>
+              {p.title}
+            </motion.button>
           ))}
         </div>
 
         {err && (
-          <div className="mt-4 p-4 rounded-md bg-amber-50 text-amber-800 text-sm">
-            Бэкенд молчит ({err}). Показываю demo-данные.
+          <div className="mt-4 p-3 rounded-xl bg-amber-50 text-amber-800 text-sm border border-amber-200">
+            Бэкенд недоступен ({err}). Показываю демо-данные.
           </div>
         )}
 
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-5 mt-6">
-          {recOffers.slice(0, 8).map((o, i) => (
-            <ProductCard key={`${o.source}-${i}-${o.name}`} offer={o} />
-          ))}
+        <div className="mt-6">
+          {loading ? (
+            <GridSkeleton count={8} />
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              {recs.map((o, i) => (
+                <ProductCard key={`${o.source}-${o.name}-${i}`} offer={o} index={i} />
+              ))}
+            </div>
+          )}
         </div>
       </section>
     </div>
@@ -106,14 +107,16 @@ export default function Home() {
 
 function SectionHeader({ title, subtitle }: { title: string; subtitle?: string }) {
   return (
-    <div className="flex items-end justify-between">
+    <div className="flex items-end justify-between gap-3">
       <div>
-        <h2 className="text-xl font-semibold text-[var(--color-ink-900)]">{title}</h2>
-        {subtitle && <p className="text-sm text-[var(--color-ink-400)] mt-1">{subtitle}</p>}
+        <h2 className="text-xl md:text-2xl font-semibold tracking-tight">{title}</h2>
+        {subtitle && (
+          <p className="text-sm text-[var(--color-ink-4)] mt-1">{subtitle}</p>
+        )}
       </div>
-      <a className="text-sm text-[var(--color-brand-500)] flex items-center gap-1 hover:underline" href="/search">
-        Все <ArrowRight className="w-4 h-4" />
-      </a>
+      <Link href="/search?q=iphone+15+128gb" className="text-sm text-[var(--color-ink-3)] hover:text-[var(--color-ink)] inline-flex items-center gap-1 transition-colors">
+        Все <ArrowRight className="w-3.5 h-3.5" />
+      </Link>
     </div>
   );
 }
