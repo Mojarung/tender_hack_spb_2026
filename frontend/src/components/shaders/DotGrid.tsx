@@ -34,14 +34,14 @@ interface Props {
 }
 
 export function DotGrid({
-  spacing      = 28,
-  size         = 1.6,
-  pushRadius   = 140,
-  pushStrength = 28,
-  springK      = 0.055,
-  damping      = 0.86,
-  color        = "rgba(11, 13, 18, 0.30)",
-  activeColor  = "rgba(79, 70, 229, 0.95)",
+  spacing      = 30,
+  size         = 1.5,
+  pushRadius   = 110,
+  pushStrength = 12,        // softer push
+  springK      = 0.085,     // pulls back home faster
+  damping      = 0.90,      // less ringing
+  color        = "rgba(11, 13, 18, 0.28)",
+  activeColor  = "rgba(79, 70, 229, 0.85)",
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
