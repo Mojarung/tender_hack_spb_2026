@@ -1,168 +1,101 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { ArrowUpRight, Sparkles } from "lucide-react";
-import Link from "next/link";
+import { ArrowUpRight, Search, Sparkles } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
 
-import { MeshGradient } from "./shaders/MeshGradient";
-
-const SOURCES = [
-  "Wildberries", "Ozon", "Яндекс Маркет", "Megamarket", "DNS",
-  "Citilink", "Re:Store", "М.Видео", "Эльдорадо", "OnlineTrade",
-];
+const SOURCES = ["Wildberries", "Ozon", "Я.Маркет", "Megamarket", "DNS", "Citilink", "Re:Store"];
 
 export function Hero() {
+  const router = useRouter();
+  const [q, setQ] = useState("");
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    const t = q.trim();
+    if (!t) return;
+    router.push(`/search?q=${encodeURIComponent(t)}`);
+  }
+
   return (
-    <section className="relative">
+    <section className="relative pt-12 md:pt-20 pb-12 md:pb-16 text-center">
       <motion.div
-        initial={{ opacity: 0, y: 18 }}
+        initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.55, ease: [0.16, 1, 0.3, 1] }}
-        className="relative overflow-hidden rounded-3xl p-8 md:p-12 text-white isolate"
-        style={{
-          // CSS-only fallback if WebGL fails to init
-          background:
-            "linear-gradient(135deg, #1f1147 0%, #4f46e5 45%, #c026d3 100%)",
-        }}
+        transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
+        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/80 backdrop-blur text-[var(--color-ink-3)] text-xs font-semibold border border-[var(--color-line)]"
       >
-        {/* WebGL animated gradient — sits between bg and content via isolate+z. */}
-        <MeshGradient
-          bg={[0.10, 0.07, 0.27]}
-          colorA={[0.31, 0.27, 0.92]}     /* indigo */
-          colorB={[0.93, 0.30, 0.69]}     /* pink */
-          colorC={[0.05, 0.04, 0.20]}     /* deep blue (darken) */
-          speed={0.9}
-          className="opacity-95"
-        />
-        {/* readability scrim */}
-        <div
-          aria-hidden
-          className="absolute inset-0 z-[1] pointer-events-none"
-          style={{
-            background:
-              "radial-gradient(60% 80% at 20% 30%, transparent 0%, rgba(8,5,32,0.35) 100%)",
-          }}
-        />
+        <Sparkles className="w-3.5 h-3.5 text-[var(--color-accent)]" />
+        {SOURCES.length}+ источников · бесплатно
+      </motion.div>
 
-        <div className="relative z-10 grid lg:grid-cols-[1.4fr_1fr] gap-10">
-          <div>
-            <motion.div
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.1, duration: 0.5 }}
-              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/10 backdrop-blur text-white/90 text-xs font-semibold border border-white/15"
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              Парсим в реальном времени · {SOURCES.length}+ источников
-            </motion.div>
+      <motion.h1
+        initial={{ opacity: 0, y: 16 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.08, duration: 0.55, ease: [0.16, 1, 0.3, 1] }}
+        className="mt-6 text-[44px] md:text-[68px] leading-[1.04] font-semibold tracking-tight max-w-[920px] mx-auto"
+      >
+        Цены{" "}
+        <span className="bg-clip-text text-transparent bg-gradient-to-r from-[var(--color-accent)] via-fuchsia-500 to-rose-500">
+          всех маркетплейсов
+        </span>
+        <br />в одном поиске
+      </motion.h1>
 
-            <motion.h1
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.18, duration: 0.55, ease: [0.16, 1, 0.3, 1] }}
-              className="mt-5 text-[44px] md:text-[60px] leading-[1.03] font-semibold tracking-tight"
-            >
-              Цены{" "}
-              <span className="bg-clip-text text-transparent bg-gradient-to-r from-white via-amber-200 to-pink-200">
-                всех маркетплейсов
-              </span>
-              <br />в одном поиске.
-            </motion.h1>
+      <motion.p
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.18, duration: 0.55 }}
+        className="mt-5 text-[var(--color-ink-3)] text-base md:text-lg max-w-[640px] mx-auto"
+      >
+        Wildberries, Ozon, Яндекс Маркет и сотни магазинов Рунета — за один запрос.
+        Локальный AI-ассистент сравнит цены, отзывы и историю.
+      </motion.p>
 
-            <motion.p
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.26, duration: 0.55 }}
-              className="mt-4 text-white/80 text-base md:text-lg max-w-[540px]"
-            >
-              Ищем товар сразу на Wildberries, Ozon, Яндекс Маркете и сотнях магазинов
-              Рунета. Локальный AI-ассистент сравнит цены, объяснит разницу
-              и подскажет лучший вариант.
-            </motion.p>
-
-            <motion.div
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.34, duration: 0.55 }}
-              className="mt-7 flex items-center gap-3 flex-wrap"
-            >
-              <Link
-                href="/search?q=iphone+15+128gb"
-                className="btn bg-white text-[var(--color-ink)] hover:bg-white/95 group"
-              >
-                Попробовать <ArrowUpRight className="w-4 h-4 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
-              </Link>
-              <Link
-                href="/register"
-                className="btn bg-white/10 text-white border border-white/20 backdrop-blur hover:bg-white/15"
-              >
-                Создать аккаунт
-              </Link>
-            </motion.div>
-          </div>
-
-          {/* Right side: glass card with live prices */}
-          <motion.div
-            initial={{ opacity: 0, x: 24 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: 0.3, duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
-            className="relative"
+      <motion.form
+        onSubmit={submit}
+        initial={{ opacity: 0, y: 12, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ delay: 0.28, duration: 0.5 }}
+        className="mt-9 max-w-[560px] mx-auto"
+      >
+        <div className="relative">
+          <Search className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-[var(--color-ink-4)]" />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="iPhone 15 128, кофемашина, кроссовки adidas…"
+            className="w-full pl-14 pr-36 py-4 text-base rounded-full bg-white border border-[var(--color-line)] shadow-[0_8px_24px_rgba(11,13,18,0.06)] focus:outline-none focus:border-[var(--color-accent)] focus:shadow-[0_8px_24px_rgba(79,70,229,0.18)] transition-all"
+            autoFocus
+          />
+          <button
+            type="submit"
+            disabled={!q.trim()}
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 btn btn-primary rounded-full !py-2.5 disabled:opacity-50"
           >
-            <div
-              className="rounded-2xl p-5 md:p-6 border border-white/20 backdrop-blur-md text-white"
-              style={{ background: "rgba(255,255,255,0.10)" }}
-            >
-              <div className="text-[11px] text-white/70 font-medium uppercase tracking-wider">
-                live · iPhone 15 128GB
-              </div>
-              <div className="mt-3 space-y-2.5">
-                {[
-                  { label: "Wildberries", price: "53 196 ₽", color: "wb" },
-                  { label: "Ozon",        price: "54 990 ₽", color: "ozon" },
-                  { label: "Я.Маркет",    price: "55 490 ₽", color: "ya_market" },
-                  { label: "Re:Store",    price: "52 900 ₽", color: "runet" },
-                ].map((r, i) => (
-                  <motion.div
-                    key={r.label}
-                    initial={{ opacity: 0, x: 16 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: 0.5 + i * 0.08, duration: 0.35 }}
-                    className="flex items-center justify-between text-sm"
-                  >
-                    <span className="flex items-center gap-2">
-                      <span className={`source-dot source-dot-${r.color}`} />
-                      <span className="text-white/85">{r.label}</span>
-                    </span>
-                    <span className="font-semibold tabular-nums">{r.price}</span>
-                  </motion.div>
-                ))}
-              </div>
-              <div className="mt-4 pt-4 border-t border-white/15 flex items-center justify-between">
-                <span className="text-xs text-white/70">Лучшая цена</span>
-                <span className="text-base font-semibold text-emerald-300">52 900 ₽</span>
-              </div>
-            </div>
-
-            <div
-              className="mt-4 overflow-hidden h-8"
-              style={{
-                maskImage:
-                  "linear-gradient(90deg, transparent, white 18%, white 82%, transparent)",
-                WebkitMaskImage:
-                  "linear-gradient(90deg, transparent, white 18%, white 82%, transparent)",
-              }}
-            >
-              <div className="marquee-track text-[11px] text-white/65 whitespace-nowrap">
-                {[...SOURCES, ...SOURCES].map((s, i) => (
-                  <span key={i} className="flex items-center gap-2">
-                    <span className="w-1 h-1 rounded-full bg-white/60" />
-                    {s}
-                  </span>
-                ))}
-              </div>
-            </div>
-          </motion.div>
+            Найти <ArrowUpRight className="w-4 h-4" />
+          </button>
         </div>
+      </motion.form>
+
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.45, duration: 0.6 }}
+        className="mt-6 flex items-center justify-center gap-3 flex-wrap text-xs text-[var(--color-ink-4)]"
+      >
+        <span>попробуйте:</span>
+        {["iphone 15 128gb", "macbook air m3", "робот пылесос", "sony wh-1000xm5"].map((s) => (
+          <button
+            key={s}
+            type="button"
+            onClick={() => router.push(`/search?q=${encodeURIComponent(s)}`)}
+            className="chip hover:bg-white"
+          >
+            {s}
+          </button>
+        ))}
       </motion.div>
     </section>
   );

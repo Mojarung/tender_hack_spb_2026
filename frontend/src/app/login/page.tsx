@@ -7,8 +7,6 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import toast from "react-hot-toast";
 
-import { AuthShell } from "@/components/AuthShell";
-import { PlasmaShader } from "@/components/shaders/PlasmaShader";
 import { api } from "@/lib/api";
 
 export default function LoginPage() {
@@ -36,50 +34,44 @@ export default function LoginPage() {
   }
 
   return (
-    <AuthShell
-      title="Вход"
-      subtitle="Чтобы сохранять понравившиеся товары"
-      background={
-        <PlasmaShader
-          /* Iridescent purple-cyan plasma */
-          a={[0.30, 0.30, 0.45]}
-          b={[0.50, 0.45, 0.55]}
-          c={[1.00, 1.00, 1.00]}
-          d={[0.10, 0.20, 0.60]}
-          speed={0.40}
-        />
-      }
-    >
-      <form onSubmit={submit} className="space-y-4" noValidate>
-        <Field label="E-mail" type="email" value={email} onChange={setEmail} autoComplete="email" autoFocus />
-        <Field label="Пароль" type="password" value={password} onChange={setPassword} autoComplete="current-password" />
+    <div className="min-h-[60vh] grid place-items-center pt-8">
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+        className="card p-8 w-full max-w-md backdrop-blur"
+        style={{ background: "rgba(255,255,255,0.92)" }}
+      >
+        <h1 className="text-2xl font-semibold tracking-tight">Вход</h1>
+        <p className="text-sm text-[var(--color-ink-4)] mt-1">Чтобы сохранять понравившиеся товары.</p>
 
-        {err && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            className="text-sm p-3 rounded-lg bg-red-500/15 text-red-200 border border-red-400/30"
-          >
-            {err}
-          </motion.div>
-        )}
+        <form onSubmit={submit} className="mt-6 space-y-4" noValidate>
+          <Field label="E-mail" type="email" value={email} onChange={setEmail} autoComplete="email" autoFocus />
+          <Field label="Пароль" type="password" value={password} onChange={setPassword} autoComplete="current-password" />
 
-        <button
-          type="submit"
-          disabled={busy || !email || !password}
-          className="btn bg-white text-[var(--color-ink)] hover:bg-white/95 w-full justify-center disabled:opacity-50"
-        >
-          {busy ? <span className="spinner" /> : <>Войти <ArrowRight className="w-4 h-4" /></>}
-        </button>
-      </form>
+          {err && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              className="text-sm p-3 rounded-lg bg-red-50 text-red-700 border border-red-100"
+            >
+              {err}
+            </motion.div>
+          )}
 
-      <p className="mt-6 text-sm text-white/65 text-center">
-        Нет аккаунта?{" "}
-        <Link href="/register" className="text-white font-semibold hover:underline">
-          Создать
-        </Link>
-      </p>
-    </AuthShell>
+          <button type="submit" disabled={busy || !email || !password} className="btn btn-primary w-full justify-center">
+            {busy ? <span className="spinner spinner-white" /> : <>Войти <ArrowRight className="w-4 h-4" /></>}
+          </button>
+        </form>
+
+        <p className="mt-6 text-sm text-[var(--color-ink-3)] text-center">
+          Нет аккаунта?{" "}
+          <Link href="/register" className="text-[var(--color-ink)] font-semibold hover:text-[var(--color-accent)] transition-colors">
+            Создать
+          </Link>
+        </p>
+      </motion.div>
+    </div>
   );
 }
 
@@ -91,7 +83,7 @@ function Field({
 }) {
   return (
     <label className="block">
-      <span className="text-xs font-semibold text-white/70 uppercase tracking-wider">{label}</span>
+      <span className="text-xs font-semibold text-[var(--color-ink-3)] uppercase tracking-wider">{label}</span>
       <input
         type={type}
         value={value}
@@ -99,7 +91,7 @@ function Field({
         autoFocus={autoFocus}
         onChange={(e) => onChange(e.target.value)}
         required
-        className="mt-1.5 w-full bg-white/10 border border-white/15 rounded-xl px-3 py-3 text-white placeholder-white/40 focus:outline-none focus:border-white/40 focus:bg-white/15 transition-colors backdrop-blur"
+        className="input mt-1.5"
       />
     </label>
   );

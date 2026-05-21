@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 
 import { ChatWidget } from "@/components/ChatWidget";
 import { Header } from "@/components/Header";
-import { GrainOverlay } from "@/components/shaders/GrainOverlay";
+import { DotGrid } from "@/components/shaders/DotGrid";
 import { Toaster } from "@/components/Toaster";
 
 export const metadata: Metadata = {
@@ -23,12 +23,17 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
       </head>
       <body>
-        <Header />
-        <main className="max-w-[1240px] mx-auto px-6 pt-8 pb-16">{children}</main>
+        {/* Site-wide interactive dot grid that reacts to the cursor.
+            Sits at z-0; everything visible has explicit positioning above. */}
+        <DotGrid />
+
+        <div className="relative z-10">
+          <Header />
+          <main className="max-w-[1240px] mx-auto px-6 pt-8 pb-16">{children}</main>
+        </div>
+
         <ChatWidget />
         <Toaster />
-        {/* Site-wide grain shader — sits above everything at 3.5% opacity */}
-        <GrainOverlay opacity={0.035} />
       </body>
     </html>
   );
