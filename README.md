@@ -43,7 +43,7 @@ PricePulse агрегирует цены товаров с Wildberries, Ozon, Я
 |---|---|
 | Backend | Python 3.13, FastAPI 0.128, uv, SQLAlchemy 2.0 (async), fastapi-users, fastmcp |
 | Scrapers (L1) | `httpx[http2]`, `curl_cffi` (TLS-impersonate Chrome 131) |
-| Scrapers (L2) | Patchright + Camoufox (optional extra `stealth`) |
+| Scrapers (L2) | nodriver — CDP-direct стелс-браузер, без WebDriver (optional extra `stealth`) |
 | L3 fallback | Firecrawl hosted (free 500 cr/mo) + Scrapfly/Apify/ZenRows free tiers (через feature-flag) |
 | CAPTCHA | OpenCV slider solver + Gemma 4 vision (free) + 2Captcha (opt-in, RUB payments) |
 | LLM локально | Ollama + Gemma 4 (`gemma4:e4b` ≈ 5 GB Q4) |
@@ -82,6 +82,17 @@ ollama pull gemma4:e4b
 - [`product.md`](./product.md) — продуктовые требования, DoD
 
 ## CHANGELOG
+
+### 2026-05-22
+
+- **Anti-bot слой переделан** под актуальное состояние инструментов (см. [`CLAUDE.md`](./CLAUDE.md)):
+  - `antibot/ratelimit.py` — реальный token-bucket на Redis (атомарный Lua-скрипт), с graceful-degradation в process-local bucket при недоступности Redis. Вшит в оркестратор — каждый запрос к источнику ждёт токен (`wb_rpm`/`ozon_rpm`/…).
+  - `antibot/browser_pool.py` — L2 стелс-браузер на **nodriver** (CDP-direct, без WebDriver — обходит automation-protocol fingerprinting). Camoufox отвергнут (beta, год без поддержки), Patchright — по бенчмарку May 2026 уступает nodriver.
+  - `antibot/cascade.py` вшит в оркестратор — circuit-breaker эскалирует слой L1→L4 (L5 за платным флагом) после 3 блокировок источника в окне 60 с.
+  - `antibot/browser_fetch.py` — L2-путь Ozon: прогрев сессии в браузере → OpenCV-солвер slider-капчи → fetch composer-api тем же origin (переиспользует L1-парсеры).
+  - `antibot/captcha.py` — реальная интеграция 2captcha для Yandex SmartCaptcha (только за платным флагом).
+  - Тесты: `test_ratelimit.py` + `test_cascade.py` (14 тестов). Весь сьют — 35 passed.
+  - Починен пред-существующий фейл `test_search_empty_groups` (повторная регистрация Prometheus-метрик при `create_app()` в фикстуре).
 
 ### 2026-05-21
 

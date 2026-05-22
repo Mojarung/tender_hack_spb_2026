@@ -43,14 +43,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Heavier stealth stack — installed only when actively driving real
-# browsers (otherwise we don't need them). Pin loosely; lock them at
-# integration time via `uv add patchright camoufox` etc.
+# L2 stealth browser — installed only when actively driving a real
+# browser. nodriver is CDP-direct (no WebDriver) and AGPL-3.0; see
+# antibot/browser_pool.py. Install with `uv sync --extra stealth`.
 stealth = [
-    "patchright",
-    "camoufox",
-    "nodriver",
-    "humancursor",
+    "nodriver>=0.50",
 ]
 # Russian NLP / sentiment — adds ~1.5 GB of torch wheels, install on demand.
 nlp = [

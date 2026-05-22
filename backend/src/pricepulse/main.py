@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator, metrics
 
+from pricepulse.antibot.browser_pool import close_browser_pool
 from pricepulse.api.routes import (
     admin,
     chat,
@@ -33,6 +34,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield
+    # Shut the L2 stealth browser down cleanly on app exit.
+    await close_browser_pool()
 
 
 def _instrument(app: FastAPI) -> None:

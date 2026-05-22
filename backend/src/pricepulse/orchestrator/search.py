@@ -16,14 +16,18 @@ from typing import Any
 import structlog
 
 from pricepulse.analytics.scoring import best_deal_score
+from pricepulse.antibot.cascade import CascadeRouter
+from pricepulse.antibot.ratelimit import RateLimiter
 from pricepulse.cache.redis_cache import RedisCache
+from pricepulse.config import get_settings
+from pricepulse.core.features import FeatureFlags
 from pricepulse.domain.enums import SourceKind
 from pricepulse.domain.models import NormalizedQuery, ProductOffer, RankedOffer, SourceGroup
 from pricepulse.enrichment.normalize import normalize_query
-from pricepulse.scrapers.base import ScraperProtocol, ScrapeResult
+from pricepulse.scrapers.base import ScrapeResult, ScraperProtocol
+from pricepulse.scrapers.megamarket import MegamarketScraper
 from pricepulse.scrapers.ozon import OzonScraper
 from pricepulse.scrapers.runet import RunetScraper
-from pricepulse.scrapers.megamarket import MegamarketScraper
 from pricepulse.scrapers.wb import WildberriesScraper
 from pricepulse.scrapers.yandex_market import YandexMarketScraper
 
@@ -47,7 +51,10 @@ class SearchOrchestrator:
         cache: RedisCache | None = None,
         adapters: dict[SourceKind, ScraperProtocol] | None = None,
         runet_fallback: ScraperProtocol | None = None,
+        limiter: RateLimiter | None = None,
+        cascade: CascadeRouter | None = None,
     ) -> None:
+        settings = get_settings()
         # Default registry. Runet hits Firecrawl when an API key is configured;
         # otherwise we transparently fall back to MegamarketScraper.
         self._registry: dict[SourceKind, ScraperProtocol] = adapters or {
@@ -58,6 +65,19 @@ class SearchOrchestrator:
         }
         self._cache = cache
         self._runet_fallback = runet_fallback or MegamarketScraper()
+        # Anti-bot L0 — token-bucket rate limiter. Defaults to a process-local
+        # bucket; the API layer injects a Redis-backed one so every worker
+        # shares one budget. See antibot/ratelimit.py.
+        self._limiter = limiter or RateLimiter(None)
+        self._rpm: dict[SourceKind, int] = {
+            SourceKind.WB: settings.wb_rpm,
+            SourceKind.OZON: settings.ozon_rpm,
+            SourceKind.YA_MARKET: settings.yandex_market_rpm,
+            SourceKind.RUNET: settings.runet_rpm,
+        }
+        # Per-source cascade state — escalates the anti-bot layer after
+        # repeated blocks within a window. See antibot/cascade.py.
+        self._cascade = cascade or CascadeRouter(FeatureFlags.from_settings(settings))
 
     def _pick(self, sources: list[SourceKind] | None) -> list[ScraperProtocol]:
         if not sources:
@@ -154,9 +174,14 @@ class SearchOrchestrator:
                         await on_offer(o)
                 return ScrapeResult(source=adapter.source, offers=offers, cached=True)
 
+        # L0 anti-bot — wait for a rate-limit token before hitting the source.
+        await self._limiter.acquire(
+            adapter.source.value, self._rpm.get(adapter.source, 30),
+        )
+
         try:
             result = await adapter.search(normalized, limit=limit, on_offer=on_offer)
-        except Exception as exc:  # noqa: BLE001 — never propagate, isolate sources
+        except Exception as exc:  # never propagate — isolate sources
             log.warning("orchestrator.adapter_crash",
                         source=adapter.source.value, error=str(exc))
             # Runet has a deterministic fallback (Megamarket)
@@ -165,7 +190,7 @@ class SearchOrchestrator:
                     result = await self._runet_fallback.search(
                         normalized, limit=limit, on_offer=on_offer
                     )
-                except Exception as fb_exc:  # noqa: BLE001
+                except Exception as fb_exc:
                     return ScrapeResult(
                         source=adapter.source, offers=[],
                         error=f"runet+fallback failed: {fb_exc}",
@@ -177,6 +202,16 @@ class SearchOrchestrator:
         if adapter.source == SourceKind.RUNET and not result.offers and not result.error:
             result = await self._runet_fallback.search(
                 normalized, limit=limit, on_offer=on_offer
+            )
+
+        # Feed the cascade router — repeated blocks escalate the anti-bot layer.
+        layer = self._cascade.layer_for(adapter.source)
+        ok = bool(result.offers) and not result.error
+        self._cascade.record_outcome(adapter.source, layer, ok)
+        if not ok:
+            log.info(
+                "orchestrator.source_blocked",
+                source=adapter.source.value, layer=int(layer), error=result.error,
             )
 
         # Populate cache on success

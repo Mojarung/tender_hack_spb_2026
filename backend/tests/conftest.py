@@ -1,12 +1,14 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from pricepulse.main import create_app
+# Reuse the single app built at import time. Calling create_app() per test
+# re-registers the Prometheus instrumentator metrics into the global
+# CollectorRegistry and raises "Duplicated timeseries".
+from pricepulse.main import app
 
 
 @pytest.fixture
 async def client() -> AsyncClient:
-    app = create_app()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac

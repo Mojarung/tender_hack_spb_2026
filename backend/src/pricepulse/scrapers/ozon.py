@@ -159,10 +159,57 @@ def _extract_offers(widget_payloads: list[dict[str, Any]], limit: int) -> list[P
 class OzonScraper:
     source: SourceKind = SourceKind.OZON
 
-    def __init__(self, timeout_s: float = 10.0) -> None:
+    def __init__(self, timeout_s: float = 10.0, *, enable_l2: bool = True) -> None:
         self._timeout = timeout_s
+        # L2 escalation — drive the nodriver stealth browser when the L1
+        # mobile API is blocked. Disable in tests / when nodriver is absent.
+        self._enable_l2 = enable_l2
 
     async def search(
+        self,
+        query: NormalizedQuery,
+        limit: int,
+        on_offer: OnOffer | None = None,
+    ) -> ScrapeResult:
+        """L1 mobile API, escalating to the L2 stealth browser on a block."""
+        result = await self._search_l1(query, limit, on_offer=on_offer)
+        if result.offers or not self._enable_l2:
+            return result
+        log.info("ozon.escalate_l2", l1_error=result.error)
+        try:
+            l2 = await self._search_l2(query, limit, on_offer=on_offer)
+        except Exception as exc:
+            log.warning("ozon.l2_failed", error=str(exc))
+            return result
+        return l2 if l2.offers else result
+
+    async def _search_l2(
+        self,
+        query: NormalizedQuery,
+        limit: int,
+        on_offer: OnOffer | None = None,
+    ) -> ScrapeResult:
+        """L2 — fetch the composer-api through the stealth browser."""
+        from pricepulse.antibot.browser_fetch import fetch_ozon_composer
+
+        body = await fetch_ozon_composer(query.normalized or query.raw)
+        if body is None:
+            return ScrapeResult(
+                source=self.source, offers=[], error="ozon L2 fetch failed",
+            )
+        payloads = _iter_search_widgets(body.get("widgetStates") or {})
+        offers = _extract_offers(payloads, limit=limit)
+        if on_offer is not None:
+            for o in offers:
+                await on_offer(o)
+        scrape_requests_total.labels(
+            source=self.source.value, outcome="ok", proxy_tier="browser",
+        ).inc()
+        scrape_offers_returned_total.labels(source=self.source.value).inc(len(offers))
+        log.info("ozon.l2_ok", returned=len(offers))
+        return ScrapeResult(source=self.source, offers=offers)
+
+    async def _search_l1(
         self,
         query: NormalizedQuery,
         limit: int,
@@ -183,7 +230,7 @@ class OzonScraper:
             try:
                 async with AsyncSession(impersonate="chrome131", timeout=self._timeout) as s:
                     resp = await s.get(url, headers=_HEADERS)
-            except Exception as exc:  # noqa: BLE001 — curl_cffi raises generic errors
+            except Exception as exc:  # curl_cffi raises generic errors
                 scrape_requests_total.labels(
                     source=self.source.value, outcome="timeout", proxy_tier="none",
                 ).inc()
