@@ -85,6 +85,22 @@ ollama pull gemma4:e4b
 
 ### 2026-05-23
 
+- **JamSpell микросервис** для общеязыковой RU-коррекции опечаток:
+  - `backend/jamspell/` — Docker-образ с C++ движком JamSpell и моделью
+    из `bakwc/JamSpell-models` (`ru.tar.gz`). FastAPI-обёртка `/fix` +
+    `/health`. Self-hosted, никаких внешних API.
+  - `enrichment/jamspell_client.py` — async HTTP-клиент с graceful
+    degradation (сервис лёг → `None`, `normalize_query` идёт без коррекции).
+  - `enrichment/normalize.py` переписан: brand-RapidFuzz → **JamSpell** →
+    translit → синонимы. `NormalizedQuery` обогащён аудит-нотами
+    «опечатка: ...».
+  - `JAMSPELL_URL` в `config.py` / `.env.example` (по умолчанию `""` =
+    выключен; в docker — `http://jamspell:8080`).
+  - `docker-compose.yml` — новый сервис `jamspell` на host-порту `8095`,
+    healthcheck по `/health`.
+  - Тесты: `test_jamspell.py` (+10 кейсов через `respx`-мок: enabled/disabled,
+    HTTP 5xx, ConnectError, интеграция в `normalize_query`). 51 passed.
+
 - **Methodology compliance** (`final_presa.pdf` p.5 — «полный запрет на любые внешние API»):
   - Удалён `antibot/captcha.py` (2captcha — внешний API).
   - Удалён `scrapers/megamarket.py` (Megamarket — маркетплейс, запрещён как 4-й источник).

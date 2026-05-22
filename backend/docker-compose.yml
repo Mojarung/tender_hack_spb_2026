@@ -109,6 +109,22 @@ services:
       - "8080:8080"
     networks: [pricepulse]
 
+  # JamSpell RU spell-correction microservice (backend/jamspell/).
+  # Self-hosted N-gram spellchecker — used by enrichment/normalize.py.
+  jamspell:
+    build: ./jamspell
+    ports:
+      - "8095:8080"
+    networks: [pricepulse]
+    healthcheck:
+      test: ["CMD", "python", "-c",
+        "import urllib.request as u; u.urlopen('http://localhost:8080/health').read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
   # ===== Observability: Prometheus + Grafana + node/container exporters =====
   prometheus:
     image: prom/prometheus:v3.0.1
