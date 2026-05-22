@@ -1,0 +1,32 @@
+# SearXNG settings for the PricePulse 4th source.
+# Mounted into /etc/searxng/settings.yml — see backend/docker-compose.yml.
+#
+# Why this file is here at all: the SearXNG default config exposes only
+# HTML output. The runet scraper (backend/src/pricepulse/scrapers/runet.py)
+# needs JSON to parse results programmatically, so we override
+# `search.formats` to include `json`.
+
+use_default_settings: true
+
+server:
+  secret_key: "pricepulse-searxng-dev-secret-change-me"
+  limiter: false
+  image_proxy: false
+  bind_address: "0.0.0.0"
+  port: 8080
+
+search:
+  formats:
+    - html
+    - json
+  language: "ru-RU"
+  safe_search: 0
+
+ui:
+  default_theme: simple
+
+# Yandex.Поиск API is explicitly banned by the hackathon methodology
+# (final_presa.pdf p.5), so we keep SearXNG away from Yandex altogether.
+engines:
+  - name: yandex
+    disabled: true

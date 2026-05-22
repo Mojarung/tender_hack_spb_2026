@@ -83,6 +83,27 @@ ollama pull gemma4:e4b
 
 ## CHANGELOG
 
+### 2026-05-23
+
+- **Methodology compliance** (`final_presa.pdf` p.5 — «полный запрет на любые внешние API»):
+  - Удалён `antibot/captcha.py` (2captcha — внешний API).
+  - Удалён `scrapers/megamarket.py` (Megamarket — маркетплейс, запрещён как 4-й источник).
+  - `scrapers/runet.py` переписан: SearXNG self-hosted → топ не-маркетплейс URL →
+    `curl_cffi` GET → JSON-LD `Product` парсер. Без Firecrawl-cloud, без Gemini/DeepSeek/Scrapfly/Apify/ZenRows.
+  - `antibot/cascade.py` ужат до L1→L3 (HTTP-impersonate → стелс-браузер → локальная капча).
+    L3-third-party и L5-paid-captcha удалены, `FeatureFlags` свёрнут до `demo_mode`.
+  - `config.py` / `.env.example` — удалены `TWOCAPTCHA_API_KEY`, `SCRAPFLY_API_KEY`,
+    `APIFY_API_TOKEN`, `ZENROWS_API_KEY`, `FIRECRAWL_API_KEY`, `FIRECRAWL_URL`,
+    `GEMINI_API_KEY`, `DEEPSEEK_API_KEY`, все `FEATURE_USE_*`, `FEATURES_ALLOW_PAID`,
+    `COST_CAP_USD`.
+  - `OLLAMA_URL` теперь явно поддерживает два варианта: удалённый Ollama на cloud-VM
+    (dev/staging, всё ещё своя инфра) и локальный (`http://ollama:11434`, docker).
+  - `backend/searxng/settings.yml` + volume-mount в `docker-compose.yml` — включает
+    `format=json` для SearXNG; Яндекс-engine отключён.
+  - Удалён `frontend2/` (Vite-прототип не собирался: отсутствует `src/lib/`).
+  - Тесты: `test_cascade.py` обновлён под новый Layer enum, `test_orchestrator.py` —
+    тест Megamarket-fallback заменён на тест «пустой Runet остаётся пустым». 41 passed.
+
 ### 2026-05-22
 
 - **Anti-bot слой переделан** под актуальное состояние инструментов (см. [`CLAUDE.md`](./CLAUDE.md)):
