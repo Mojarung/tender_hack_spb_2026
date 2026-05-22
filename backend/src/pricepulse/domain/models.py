@@ -26,6 +26,7 @@ class SourceGroup(BaseModel):
     source: SourceKind
     count: int
     min_price: Decimal | None
+    avg_price: Decimal | None = None
     median_price: Decimal | None = None
     currency: str = "RUB"
     offers: list[ProductOffer]
@@ -36,6 +37,7 @@ class NormalizedQuery(BaseModel):
     raw: str
     normalized: str
     expansions: list[str] = Field(default_factory=list)
+    alternates: list[str] = Field(default_factory=list)
 
 
 class SearchRequest(BaseModel):

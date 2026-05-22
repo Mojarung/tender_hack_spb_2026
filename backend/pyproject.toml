@@ -33,8 +33,10 @@ dependencies = [
     "fastapi-users[sqlalchemy]>=14.0",
     # ===== Agent: MCP tool server + chatbot =====
     "fastmcp>=3.2",
-    # ===== NLP / fuzzy =====
+    # ===== NLP / fuzzy (core — query normalisation needs these) =====
     "rapidfuzz>=3.10",
+    "pymorphy3>=2.0",           # RU lemmatization (dictionary-based, no torch)
+    "pymorphy3-dicts-ru",       # Russian dictionary for pymorphy3
     # ===== Observability =====
     "prometheus-fastapi-instrumentator>=7.1",
     "prometheus-client>=0.22",
@@ -49,9 +51,8 @@ dependencies = [
 stealth = [
     "nodriver>=0.50",
 ]
-# Russian NLP / sentiment — adds ~1.5 GB of torch wheels, install on demand.
+# Russian sentiment — adds ~1.5 GB of torch wheels, install on demand.
 nlp = [
-    "pymorphy3>=2.0",
     "symspellpy>=6.7",
     "transformers>=4.46",
     "torch>=2.5",

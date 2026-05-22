@@ -2299,6 +2299,8 @@ dependencies = [
     { name = "prometheus-fastapi-instrumentator" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "pymorphy3" },
+    { name = "pymorphy3-dicts-ru" },
     { name = "rapidfuzz" },
     { name = "redis" },
     { name = "sqlalchemy", extra = ["asyncio"] },
@@ -2315,7 +2317,6 @@ captcha = [
     { name = "primp" },
 ]
 nlp = [
-    { name = "pymorphy3" },
     { name = "symspellpy" },
     { name = "torch" },
     { name = "transformers" },
@@ -2357,7 +2358,8 @@ requires-dist = [
     { name = "prometheus-fastapi-instrumentator", specifier = ">=7.1" },
     { name = "pydantic", specifier = ">=2.10" },
     { name = "pydantic-settings", specifier = ">=2.7" },
-    { name = "pymorphy3", marker = "extra == 'nlp'", specifier = ">=2.0" },
+    { name = "pymorphy3", specifier = ">=2.0" },
+    { name = "pymorphy3-dicts-ru" },
     { name = "rapidfuzz", specifier = ">=3.10" },
     { name = "redis", specifier = ">=5.2" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.36" },
