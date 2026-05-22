@@ -19,6 +19,8 @@ dependencies = [
     "httpx[http2]>=0.28",
     "curl-cffi>=0.7",           # TLS impersonation (chrome131), HTTP/2+3
     "tenacity>=9.0",
+    # ===== Browser (L2 for YandexMarket XHR interception) =====
+    "playwright>=1.49",
     # ===== 4-th source =====
     "firecrawl-py>=2.0",
     # ===== Storage =====

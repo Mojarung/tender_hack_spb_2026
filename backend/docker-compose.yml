@@ -87,7 +87,7 @@ services:
 
   # ===== 4th source: self-hosted Firecrawl + SearXNG =====
   firecrawl-api:
-    image: firecrawl/firecrawl:latest
+    image: ghcr.io/mendableai/firecrawl:latest
     env_file: .env
     environment:
       USE_DB_AUTHENTICATION: "false"

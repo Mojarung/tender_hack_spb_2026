@@ -1,14 +1,16 @@
-"""Manual smoke test for the full search pipeline.
+"""Manual smoke test for the search pipeline.
 
 Usage:
     uv run python scripts/smoke_search.py "iphone 15 128"
+    uv run python scripts/smoke_search.py "iphone 15 128" 3 --sources wb,ozon,ya_market
 
 Prints a per-source summary and the top 3 offers from each adapter.
-Hits real marketplaces — use sparingly.
+Hits real marketplaces - use sparingly.
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import sys
@@ -18,13 +20,36 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 from pricepulse.orchestrator.search import SearchOrchestrator
+from pricepulse.domain.enums import SourceKind
 
 
-async def main(query: str, limit: int) -> None:
+def _parse_sources(raw: str | None) -> list[SourceKind] | None:
+    if not raw:
+        return None
+    mapping = {s.value: s for s in SourceKind}
+    sources: list[SourceKind] = []
+    for item in raw.split(","):
+        name = item.strip()
+        if not name:
+            continue
+        if name not in mapping:
+            allowed = ", ".join(mapping)
+            raise SystemExit(f"Unknown source '{name}'. Allowed: {allowed}")
+        sources.append(mapping[name])
+    return sources or None
+
+
+async def main(query: str, limit: int, sources: list[SourceKind] | None) -> None:
     orch = SearchOrchestrator()
-    normalized, groups = await orch.run(query=query, max_per_source=limit)
+    normalized, groups, top_deals = await orch.run(
+        query=query,
+        max_per_source=limit,
+        sources=sources,
+    )
 
-    print(f"\nQuery: {normalized.raw}  →  normalized: '{normalized.normalized}'")
+    print(f"\nQuery: {normalized.raw}  ->  normalized: '{normalized.normalized}'")
+    if normalized.expansions:
+        print("Expansions:", "; ".join(normalized.expansions))
     print("=" * 78)
 
     for g in groups:
@@ -33,13 +58,23 @@ async def main(query: str, limit: int) -> None:
             head += f"  ERROR: {g.error[:60]}"
         print(head)
         for o in g.offers[:3]:
-            print(f"  • {o.price:>9}₽  {o.name[:62]}")
+            print(f"  - {o.price:>9} RUB  {o.name[:62]}")
             print(f"            {o.url}")
         print("-" * 78)
+
+    if top_deals:
+        print("Top deals:")
+        for deal in top_deals[:3]:
+            offer = deal.offer
+            print(
+                f"  #{deal.rank} score={deal.score} "
+                f"[{offer.source.value}] {offer.price} RUB  {offer.name[:62]}"
+            )
 
     payload = {
         "query": normalized.model_dump(),
         "groups": [g.model_dump(mode="json") for g in groups],
+        "top_deals": [d.model_dump(mode="json") for d in top_deals],
     }
     out_path = "smoke_result.json"
     with open(out_path, "w", encoding="utf-8") as f:
@@ -48,9 +83,12 @@ async def main(query: str, limit: int) -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: smoke_search.py <query> [limit]")
-        sys.exit(2)
-    q = sys.argv[1]
-    n = int(sys.argv[2]) if len(sys.argv) > 2 else 5
-    asyncio.run(main(q, n))
+    parser = argparse.ArgumentParser()
+    parser.add_argument("query")
+    parser.add_argument("limit", nargs="?", type=int, default=5)
+    parser.add_argument(
+        "--sources",
+        help="Comma-separated sources: wb,ozon,ya_market,runet",
+    )
+    args = parser.parse_args()
+    asyncio.run(main(args.query, args.limit, _parse_sources(args.sources)))
