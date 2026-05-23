@@ -1,18 +1,17 @@
-"""Cascading anti-bot fallback strategy (L1 → L2 → L3 → L4).
+"""Cascading anti-bot fallback strategy (L1 → L2 → L3).
 
-Free-mode is the default — paid layers are skipped entirely unless feature
-flags allow them. See backend/docs/free-mode.md.
+Methodology compliance (final_presa.pdf, p.5 — «полный запрет на любые
+внешние API»): the previous L3 (Scrapfly / Apify / ZenRows) and L5 (paid
+2Captcha) layers are dropped. Every layer the router can escalate to
+runs on our own infrastructure:
 
-  L1: curl_cffi (TLS impersonate) + free Oracle/WARP proxy.   $0 / req
-  L2: Patchright / Camoufox + warm cookies.                   $0 / req (CPU+RAM)
-  L3: third-party (Scrapfly/Apify/ZenRows). Free-tier always allowed;
-      paid plans only when `paid_l3_enabled`.
-  L4: local CAPTCHA (OpenCV slider + Gemma 4 VLM). $0.
-       Paid fallback to 2Captcha for kaleidoscope only when
-       `paid_captcha_enabled`.
+  L1: ``curl_cffi`` HTTP impersonation. Free, ~milliseconds per request.
+  L2: ``nodriver`` stealth browser. Free; CPU + RAM.
+  L3: local CAPTCHA solving — OpenCV slider solver + Gemma 4 VLM. Free.
 
-Each layer has a circuit-breaker. The router escalates the next request
-for the affected source after N consecutive failures within a window.
+Each layer has a circuit-breaker: the router escalates the next request
+for an affected source after `fail_threshold` failures within
+`fail_window_s` seconds, capped at :attr:`CascadeRouter.max_layer`.
 """
 
 from __future__ import annotations
@@ -21,16 +20,13 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from time import time
 
-from pricepulse.core.features import FeatureFlags
 from pricepulse.domain.enums import SourceKind
 
 
 class Layer(IntEnum):
     L1_HTTP_IMPERSONATE = 1
     L2_STEALTH_BROWSER = 2
-    L3_THIRD_PARTY = 3       # free-tier always, paid only behind feature flag
-    L4_CAPTCHA_LOCAL = 4     # OpenCV + Gemma 4 (free)
-    L5_CAPTCHA_PAID = 5      # 2Captcha, opt-in
+    L3_CAPTCHA_LOCAL = 3   # OpenCV slider + Gemma 4 VLM
 
 
 @dataclass(slots=True)
@@ -53,7 +49,7 @@ class CascadeState:
         *,
         fail_window_s: float = 60.0,
         fail_threshold: int = 3,
-        max_layer: Layer = Layer.L4_CAPTCHA_LOCAL,
+        max_layer: Layer = Layer.L3_CAPTCHA_LOCAL,
     ) -> None:
         s = self.stats.setdefault(layer, LayerStats())
         if ok:
@@ -67,17 +63,16 @@ class CascadeState:
 
 
 class CascadeRouter:
-    """Stateful router that picks the cheapest viable layer per source,
-    honoring feature flags so paid layers are unreachable in free-mode."""
+    """Stateful router — pick the cheapest viable layer per source."""
 
-    def __init__(self, flags: FeatureFlags) -> None:
-        self._flags = flags
-        self._state: dict[SourceKind, CascadeState] = {s: CascadeState() for s in SourceKind}
+    def __init__(self) -> None:
+        self._state: dict[SourceKind, CascadeState] = {
+            s: CascadeState() for s in SourceKind
+        }
 
     @property
     def max_layer(self) -> Layer:
-        """Top of the ladder we're allowed to climb to."""
-        return Layer.L5_CAPTCHA_PAID if self._flags.paid_captcha_enabled else Layer.L4_CAPTCHA_LOCAL
+        return Layer.L3_CAPTCHA_LOCAL
 
     def layer_for(self, source: SourceKind) -> Layer:
         return self._state[source].current
@@ -87,15 +82,3 @@ class CascadeRouter:
 
     def reset(self, source: SourceKind) -> None:
         self._state[source] = CascadeState()
-
-    def can_use_paid_l3(self) -> bool:
-        return self._flags.paid_l3_enabled
-
-    def can_use_paid_captcha(self) -> bool:
-        return self._flags.paid_captcha_enabled
-
-    def can_use_paid_llm(self) -> bool:
-        return self._flags.paid_llm_enabled
-
-    def can_use_paid_proxies(self) -> bool:
-        return self._flags.paid_proxies_enabled

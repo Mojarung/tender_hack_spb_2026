@@ -49,10 +49,11 @@ PricePulse — интеллектуальный агрегатор цен для
 - группировка `SourceGroup` + Best-Deal ранжирование (`analytics/scoring.py`);
 - SSE-стриминг — `GET /api/v1/search/stream` (`api/routes/stream.py`).
 
-## Anti-bot слой (переделан 22.05.2026)
+## Anti-bot слой (переделан 22.05, ужат под методичку 23.05)
 
-Каскад **L0→L5**, ленивая эскалация — дорогой слой включается только когда дешёвый
-заблокирован. Обоснование — это и есть «стратегия обхода ограничений» из ТЗ.
+Каскад **L0→L3**, ленивая эскалация — дорогой слой включается только когда дешёвый
+заблокирован. Все слои бегут **на нашей инфраструктуре** — никаких внешних API
+(методичка `final_presa.pdf` p.5).
 
 - **L0** `antibot/ratelimit.py` — token-bucket на Redis (атомарный Lua-скрипт);
   при недоступности Redis деградирует в process-local bucket. Вшит в `_safe_call`
@@ -64,15 +65,23 @@ PricePulse — интеллектуальный агрегатор цен для
   `get_browser_pool()`, закрывается в lifespan `main.py`. `antibot/browser_fetch.py` —
   L2-путь Ozon: прогрев сессии → решение slider-капчи → fetch composer-api тем же
   origin (переиспользует L1-парсеры).
-- **L3** — Firecrawl/Scrapfly/Apify/ZenRows (free tier всегда, платный — за флагом).
-- **L4** `antibot/slider_solver.py` (OpenCV, free) + `antibot/vlm_solver.py` (Gemma 4).
-- **L5** `antibot/captcha.py` — 2captcha для Yandex SmartCaptcha (только за
-  `FEATURE_USE_2CAPTCHA` + killswitch).
+- **L3** `antibot/slider_solver.py` (OpenCV) + `antibot/vlm_solver.py` (Gemma 4 через
+  локальный Ollama). Free, на нашем CPU/GPU.
 - `antibot/cascade.py` — `CascadeRouter`: per-source circuit-breaker, эскалирует
-  слой после 3 блокировок источника в окне 60 с. Вшит в `_safe_call`.
+  слой после 3 блокировок источника в окне 60 с. Вшит в `_safe_call`. Без флагов —
+  платные ветки удалены целиком.
 
-**Важно про L2**: в `browser_fetch.py` CSS-селекторы Ozon-капчи помечены `LIVE-CHECK` —
-проверить на сети хакатона. Геометрия солвера (`solve_slider`) протестирована,
+**Удалено 23.05 по методичке**: `antibot/captcha.py` (2captcha — внешний API),
+`scrapers/megamarket.py` (марекетплейс — запрещён как 4-й источник), Firecrawl-cloud
+в `runet.py`, Gemini/DeepSeek/Scrapfly/Apify/ZenRows ключи в `config.py`/`.env.example`,
+все `FEATURE_USE_*` / `FEATURES_ALLOW_PAID` / `cost_cap_usd`.
+
+**4-й источник** — `scrapers/runet.py`: self-hosted **SearXNG** (URL discovery) →
+фильтр маркетплейсов → `curl_cffi` GET → JSON-LD `Product` парсер. Конфиг SearXNG
+с `format=json` — `backend/searxng/settings.yml`, монтируется в docker-compose.
+
+**Важно про L2 Ozon**: CSS-селекторы slider-капчи в `browser_fetch.py` помечены
+`LIVE-CHECK` — проверить на сети хакатона. Геометрия `solve_slider` протестирована,
 DOM-привязка к живому Ozon — нет.
 
 **Решения по инструментам** (исследование 22.05.2026): nodriver выбран по бенчмарку
@@ -82,17 +91,29 @@ Patchright отвергнут — Playwright-инструменты палятс
 ## Статус по ТЗ (аудит 22.05.2026, обновлён 23.05)
 
 **Закрыто**: 4 источника, группировка + счётчики + **min/avg/median**-цена, fan-out
-с изоляцией, SSE на бэке, anti-bot слой, free-mode флаги, sentiment-анализ,
-Prometheus-метрики, **синонимы** — pymorphy3-лемматизация + курируемый тезаурус
-(`enrichment/morphology.py` + `synonym_thesaurus.py`); оркестратор делает
-synonym-retry для источника с пустой выдачей.
+с изоляцией, SSE на бэке, anti-bot слой L0→L3 (целиком on-prem), sentiment-анализ,
+Prometheus-метрики, **синонимы** — pymorphy3 + курируемый тезаурус
+(`enrichment/morphology.py` + `synonym_thesaurus.py`), **methodology-compliance**
+(нет внешних API: Firecrawl-cloud / 2captcha / Gemini / DeepSeek / Scrapfly / Apify /
+ZenRows удалены; Megamarket не является 4-м источником; 4-й источник — self-hosted
+SearXNG + JSON-LD).
 
 **Открытые дыры (P0)**:
-- **Опечатки** — `enrichment/typos.py` правит только бренды (словарь ~60 слов),
-  общие названия товаров не покрыты.
+- **Регион** — `SearchRequest` пока без `region`, ТЗ методички (p.4) требует выбор.
+- **Категории жюри** — тезаурус ориентирован на электронику; методичка p.3 называет
+  **Одежда / Шины / Оргтехника** — нужно расширить группы.
 - **BPMN-схема** — есть только `docs/bpmn.placeholder.md`, диаграммы нет.
 - **SSE на фронте** — `frontend/` шлёт обычный POST, готовый `/search/stream` не используется.
 - **Характеристики товара** — реально заполнены только у WB.
+
+**Опечатки** — закрыты транформером **SAGE FRED-T5 distilled-95M** от Сбера
+(MIT, RUSpellRU F1 = 78.9 — бьёт GPT-4 на русском spell). Сервис в
+`backend/spellcheck/` (FastAPI + transformers + torch CPU, ~2 ГБ image),
+клиент `enrichment/spellcheck_client.py` ходит HTTP. Pipeline `normalize_query`:
+brand-RapidFuzz → SpellCheck (контекстная RU-коррекция) → translit → синонимы.
+`SPELLCHECK_URL=""` отключает шаг (graceful: если сервис лежит — `normalize_query`
+идёт без коррекции). Предыдущая JamSpell-реализация выпилена — small-модель давала
+wrong-corrections («стирлная → сильная»).
 
 ## Ограничения и риски
 

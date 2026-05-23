@@ -63,8 +63,7 @@ async def test_run_merges_four_sources_and_isolates_crash() -> None:
         ),
         SourceKind.RUNET: _Stub(SourceKind.RUNET, offers=[_offer(SourceKind.RUNET, "ru-1", 250)]),
     }
-    runet_fb = _Stub(SourceKind.RUNET, offers=[])
-    orch = SearchOrchestrator(adapters=adapters, runet_fallback=runet_fb)
+    orch = SearchOrchestrator(adapters=adapters)
 
     normalized, groups, _ = await orch.run("iphone", max_per_source=10)
 
@@ -86,8 +85,7 @@ async def test_stream_yields_done_event_last() -> None:
         SourceKind.YA_MARKET: _Stub(SourceKind.YA_MARKET, offers=[]),
         SourceKind.RUNET: _Stub(SourceKind.RUNET, offers=[]),
     }
-    orch = SearchOrchestrator(adapters=adapters,
-                              runet_fallback=_Stub(SourceKind.RUNET, offers=[]))
+    orch = SearchOrchestrator(adapters=adapters)
 
     events = [e async for e in orch.stream("iphone", max_per_source=5)]
     types = [t for t, _ in events]
@@ -112,8 +110,7 @@ async def test_top_deals_are_ranked_descending_by_score() -> None:
         SourceKind.YA_MARKET: _Stub(SourceKind.YA_MARKET, offers=[]),
         SourceKind.RUNET: _Stub(SourceKind.RUNET, offers=[]),
     }
-    orch = SearchOrchestrator(adapters=adapters,
-                              runet_fallback=_Stub(SourceKind.RUNET, offers=[]))
+    orch = SearchOrchestrator(adapters=adapters)
     _, _, top = await orch.run("anything", max_per_source=10)
     assert len(top) == 3
     # Strictly decreasing scores; rank matches order.
@@ -124,20 +121,19 @@ async def test_top_deals_are_ranked_descending_by_score() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_falls_back_to_megamarket_when_runet_empty() -> None:
-    """If RunetScraper returns nothing without an error, we transparently
-    try the Megamarket fallback adapter (see anti-bot.md §5.4)."""
-    primary_runet = _Stub(SourceKind.RUNET, offers=[])
-    fallback = _Stub(SourceKind.RUNET, offers=[_offer(SourceKind.RUNET, "mm-1", 999)])
+async def test_runet_empty_stays_empty_without_marketplace_fallback() -> None:
+    """The methodology bans marketplaces as the 4th source, so the previous
+    Megamarket fallback is gone: when RunetScraper returns nothing the group
+    stays empty rather than being silently filled with marketplace offers."""
     adapters = {
         SourceKind.WB: _Stub(SourceKind.WB, offers=[]),
         SourceKind.OZON: _Stub(SourceKind.OZON, offers=[]),
         SourceKind.YA_MARKET: _Stub(SourceKind.YA_MARKET, offers=[]),
-        SourceKind.RUNET: primary_runet,
+        SourceKind.RUNET: _Stub(SourceKind.RUNET, offers=[]),
     }
-    orch = SearchOrchestrator(adapters=adapters, runet_fallback=fallback)
+    orch = SearchOrchestrator(adapters=adapters)
 
     _, groups, _ = await orch.run("anything", max_per_source=5)
     runet = next(g for g in groups if g.source == SourceKind.RUNET)
-    assert runet.count == 1
-    assert runet.offers[0].name == "mm-1"
+    assert runet.count == 0
+    assert runet.error is None

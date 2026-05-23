@@ -22,12 +22,10 @@ from pricepulse.antibot.cascade import CascadeRouter
 from pricepulse.antibot.ratelimit import RateLimiter
 from pricepulse.cache.redis_cache import RedisCache
 from pricepulse.config import get_settings
-from pricepulse.core.features import FeatureFlags
 from pricepulse.domain.enums import SourceKind
 from pricepulse.domain.models import NormalizedQuery, ProductOffer, RankedOffer, SourceGroup
 from pricepulse.enrichment.normalize import normalize_query
 from pricepulse.scrapers.base import ScrapeResult, ScraperProtocol
-from pricepulse.scrapers.megamarket import MegamarketScraper
 from pricepulse.scrapers.ozon import OzonScraper
 from pricepulse.scrapers.runet import RunetScraper
 from pricepulse.scrapers.wb import WildberriesScraper
@@ -52,13 +50,12 @@ class SearchOrchestrator:
         *,
         cache: RedisCache | None = None,
         adapters: dict[SourceKind, ScraperProtocol] | None = None,
-        runet_fallback: ScraperProtocol | None = None,
         limiter: RateLimiter | None = None,
         cascade: CascadeRouter | None = None,
     ) -> None:
         settings = get_settings()
-        # Default registry. Runet hits Firecrawl when an API key is configured;
-        # otherwise we transparently fall back to MegamarketScraper.
+        # Default registry. RunetScraper is the 4th source — self-hosted
+        # SearXNG + JSON-LD scrape, no external APIs (methodology compliance).
         self._registry: dict[SourceKind, ScraperProtocol] = adapters or {
             SourceKind.WB: WildberriesScraper(),
             SourceKind.OZON: OzonScraper(),
@@ -66,7 +63,6 @@ class SearchOrchestrator:
             SourceKind.RUNET: RunetScraper(),
         }
         self._cache = cache
-        self._runet_fallback = runet_fallback or MegamarketScraper()
         # Anti-bot L0 — token-bucket rate limiter. Defaults to a process-local
         # bucket; the API layer injects a Redis-backed one so every worker
         # shares one budget. See antibot/ratelimit.py.
@@ -79,7 +75,7 @@ class SearchOrchestrator:
         }
         # Per-source cascade state — escalates the anti-bot layer after
         # repeated blocks within a window. See antibot/cascade.py.
-        self._cascade = cascade or CascadeRouter(FeatureFlags.from_settings(settings))
+        self._cascade = cascade or CascadeRouter()
 
     def _pick(self, sources: list[SourceKind] | None) -> list[ScraperProtocol]:
         if not sources:
@@ -97,7 +93,7 @@ class SearchOrchestrator:
         region_id: int = 213,
         nofix: bool = False,
     ) -> tuple[NormalizedQuery, list[SourceGroup], list[RankedOffer]]:
-        normalized = await normalize_query(query, fix=not nofix)
+        normalized = await normalize_query(query, fix=not nofix, cache=self._cache)
         adapters = self._pick(sources)
         results = await asyncio.gather(
             *[
@@ -118,7 +114,7 @@ class SearchOrchestrator:
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
         """Yields SSE-shaped events as adapters report offers."""
         started = time.perf_counter()
-        normalized = await normalize_query(query)
+        normalized = await normalize_query(query, cache=self._cache)
         yield "query_normalized", normalized.model_dump()
 
         adapters = self._pick(sources)
@@ -207,27 +203,11 @@ class SearchOrchestrator:
                 region_id=region_id,
             )
         except Exception as exc:  # never propagate — isolate sources
-            log.warning("orchestrator.adapter_crash",
-                        source=adapter.source.value, error=str(exc))
-            # Runet has a deterministic fallback (Megamarket)
-            if adapter.source == SourceKind.RUNET:
-                try:
-                    result = await self._runet_fallback.search(
-                        normalized, limit=limit, on_offer=on_offer, region_id=region_id
-                    )
-                except Exception as fb_exc:
-                    return ScrapeResult(
-                        source=adapter.source, offers=[],
-                        error=f"runet+fallback failed: {fb_exc}",
-                    )
-            else:
-                return ScrapeResult(source=adapter.source, offers=[], error=str(exc))
-
-        # If primary RunetScraper returned nothing, try Megamarket
-        if adapter.source == SourceKind.RUNET and not result.offers and not result.error:
-            result = await self._runet_fallback.search(
-                normalized, limit=limit, on_offer=on_offer, region_id=region_id
+            log.warning(
+                "orchestrator.adapter_crash",
+                source=adapter.source.value, error=str(exc),
             )
+            return ScrapeResult(source=adapter.source, offers=[], error=str(exc))
 
         # Synonym retry — an empty (not blocked) result is often just a
         # vocabulary mismatch; retry once with the top synonym variant.
@@ -235,7 +215,6 @@ class SearchOrchestrator:
             not result.offers
             and not result.error
             and normalized.alternates
-            and adapter.source != SourceKind.RUNET
         ):
             alt = NormalizedQuery(raw=normalized.raw, normalized=normalized.alternates[0])
             log.info(
