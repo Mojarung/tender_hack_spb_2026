@@ -1,3 +1,15 @@
+import sys
+import asyncio
+
+# Принудительно устанавливаем WindowsProactorEventLoopPolicy для корректной работы nodriver на Windows
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    try:
+        import uvicorn.loops.asyncio
+        uvicorn.loops.asyncio.asyncio_setup = lambda *args, **kwargs: None
+    except ImportError:
+        pass
+
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -52,13 +64,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             pass
     except Exception as exc:    # never fatal — first request will retry
         import structlog
-        structlog.get_logger(__name__).warning("ozon_browser_prewarm_failed", error=str(exc))
+        structlog.get_logger(__name__).warning("ozon_browser_prewarm_failed", error=repr(exc), exc_info=True)
     try:
         wb = await get_wb_browser()
         await wb._ensure_started()    # type: ignore[attr-defined]
     except Exception as exc:
         import structlog
-        structlog.get_logger(__name__).warning("wb_browser_prewarm_failed", error=str(exc))
+        structlog.get_logger(__name__).warning("wb_browser_prewarm_failed", error=repr(exc), exc_info=True)
 
     yield
     # Tear singletons down cleanly on app exit.

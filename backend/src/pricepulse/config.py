@@ -96,7 +96,9 @@ class Settings(BaseSettings):
 
     # Local LLM (Gemma 4 via Ollama)
     ollama_url: str = "http://ollama:11434"
+    ollama_api_key: str = ""
     ollama_vision_model: str = "gemma4:e4b"
+    ollama_text_model: str = "qwen3.5:9b"
 
     # Demo mode — pre-warm Redis cache for jury-known queries so the live
     # demo answers in <100 ms. Paid feature flags / cost-guard are gone —

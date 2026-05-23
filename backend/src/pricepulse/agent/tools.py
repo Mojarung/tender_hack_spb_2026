@@ -69,14 +69,14 @@ async def search_products(query: str, max_per_source: int = 5) -> dict:
         query: free-form product query in Russian or English
         max_per_source: how many offers to keep per source (default 5)
     """
-    orchestrator = SearchOrchestrator()
-    normalized, groups, top_deals = await orchestrator.run(
+    normalized, groups, top_deals, clarification = await orchestrator.run(
         query=query, max_per_source=max_per_source
     )
     return {
         "query": normalized.model_dump(),
         "groups": [_summarise_group(g) for g in groups],
         "top_deals": [_summarise_deal(d) for d in top_deals[:5]],
+        "clarification": _jsonify(clarification) if clarification else None,
     }
 
 

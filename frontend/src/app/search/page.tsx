@@ -8,12 +8,13 @@ import { Suspense, useEffect, useRef, useState } from "react";
 
 import { ProductCard } from "@/components/ProductCard";
 import { GridSkeleton } from "@/components/Skeleton";
+import { SmartSuggestionCard } from "@/components/SmartSuggestionCard";
 import { api } from "@/lib/api";
 import { formatPrice } from "@/lib/format";
 import { DEFAULT_REGION_ID, getRegion } from "@/lib/regions";
 import {
   SOURCE_LABEL, type ProductOffer, type SearchResponse,
-  type Source, type SourceGroup,
+  type Source, type SourceGroup, type QueryClarification, type ClarificationOption
 } from "@/lib/types";
 
 const EMPTY_GROUP = (source: Source): SourceGroup => ({
@@ -41,6 +42,7 @@ function SearchInner() {
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<Source | "all">("all");
+  const [clarification, setClarification] = useState<QueryClarification | null>(null);
   // Inline correction display while streaming — populated from query_normalized
   // event so the user sees the canonical query immediately, not after `done`.
   // URL canonicalization still happens on `done` (so the stream isn't aborted).
@@ -50,6 +52,17 @@ function SearchInner() {
    *  for the new `q`. The next run reuses the data already in state and
    *  just clears the loading flag — no duplicate request. */
   const skipNextFetch = useRef(false);
+
+  const handleClarificationSelect = (option: ClarificationOption) => {
+    const isRawSearch = option.query.toLowerCase() === q.toLowerCase() || option.query === q;
+    const sp = new URLSearchParams();
+    sp.set("q", option.query);
+    if (isRawSearch) {
+      sp.set("nofix", "1");
+    }
+    sp.set("region_id", String(region.id));
+    router.push(`/search?${sp.toString()}`);
+  };
 
   useEffect(() => {
     if (!q) { setLoading(false); return; }
@@ -65,7 +78,7 @@ function SearchInner() {
       query: { raw: q, normalized: q, expansions: [] },
       groups: [], top_deals: [], took_ms: 0, partial: true,
     });
-    setErr(null); setLoading(true); setLiveCorrection(null);
+    setErr(null); setLoading(true); setLiveCorrection(null); setClarification(null);
 
     // `from` present ⇒ we're already showing the canonical query.
     const useNofix = nofix || !!from;
@@ -87,6 +100,10 @@ function SearchInner() {
           if (!useNofix && normalizedCaptured && normalizedCaptured !== q.toLowerCase()) {
             setLiveCorrection({ from: q, to: normalizedCaptured });
           }
+        },
+        onQueryClarified: (c) => {
+          if (cancelled) return;
+          setClarification(c);
         },
         onSourceStarted: (e) => {
           if (cancelled) return;
@@ -271,6 +288,11 @@ function SearchInner() {
             </motion.p>
           )}
         </motion.div>
+
+        <SmartSuggestionCard
+          clarification={clarification}
+          onSelect={handleClarificationSelect}
+        />
 
         {err && (
           <div className="mt-4 p-3 rounded-xl bg-amber-50 text-amber-800 text-sm border border-amber-200">

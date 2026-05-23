@@ -71,6 +71,18 @@ class RankedOffer(BaseModel):
     rank: int
 
 
+class ClarificationOption(BaseModel):
+    label: str = Field(..., description="Short category title with an emoji, e.g. '📱 Смартфоны Apple'")
+    text: str = Field(..., description="Clarification action text, e.g. 'Искать iPhone'")
+    query: str = Field(..., description="The refined query to execute")
+
+
+class QueryClarification(BaseModel):
+    is_ambiguous: bool
+    reason: str | None = None
+    options: list[ClarificationOption] = Field(default_factory=list)
+
+
 class SearchResponse(BaseModel):
     query: NormalizedQuery
     groups: list[SourceGroup]
@@ -80,3 +92,5 @@ class SearchResponse(BaseModel):
     )
     took_ms: int
     partial: bool = False
+    clarification: QueryClarification | None = None
+

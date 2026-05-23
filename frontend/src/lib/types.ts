@@ -53,12 +53,25 @@ export interface NormalizedQuery {
 }
 export interface RankedOffer { offer: ProductOffer; score: number; rank: number; }
 
+export interface ClarificationOption {
+  label: string;
+  text: string;
+  query: string;
+}
+
+export interface QueryClarification {
+  is_ambiguous: boolean;
+  reason: string | null;
+  options: ClarificationOption[];
+}
+
 export interface SearchResponse {
   query: NormalizedQuery;
   groups: SourceGroup[];
   top_deals: RankedOffer[];
   took_ms: number;
   partial: boolean;
+  clarification?: QueryClarification | null;
 }
 
 export interface Favorite {

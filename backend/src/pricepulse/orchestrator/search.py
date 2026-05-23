@@ -23,8 +23,9 @@ from pricepulse.antibot.ratelimit import RateLimiter
 from pricepulse.cache.redis_cache import RedisCache
 from pricepulse.config import get_settings
 from pricepulse.domain.enums import SourceKind
-from pricepulse.domain.models import NormalizedQuery, ProductOffer, RankedOffer, SourceGroup
+from pricepulse.domain.models import NormalizedQuery, ProductOffer, RankedOffer, SourceGroup, QueryClarification
 from pricepulse.enrichment.normalize import normalize_query
+from pricepulse.enrichment.query_clarification import check_and_clarify_query
 from pricepulse.scrapers.base import ScrapeResult, ScraperProtocol
 
 # TEMP: imports kept (commented in registry below) so reverting is one
@@ -112,7 +113,8 @@ class SearchOrchestrator:
         *,
         region_id: int = 213,
         nofix: bool = False,
-    ) -> tuple[NormalizedQuery, list[SourceGroup], list[RankedOffer]]:
+    ) -> tuple[NormalizedQuery, list[SourceGroup], list[RankedOffer], QueryClarification | None]:
+        clarification_task = asyncio.create_task(check_and_clarify_query(query))
         normalized = await normalize_query(query, fix=not nofix, cache=self._cache)
         adapters = self._pick(sources)
         results = await asyncio.gather(
@@ -123,7 +125,11 @@ class SearchOrchestrator:
         )
         groups = [_to_group(r) for r in results]
         top_deals = _rank_top_deals(groups, top_k=10)
-        return normalized, groups, top_deals
+        try:
+            clarification = await clarification_task
+        except Exception:
+            clarification = None
+        return normalized, groups, top_deals, clarification
 
     async def stream(
         self,
@@ -136,8 +142,16 @@ class SearchOrchestrator:
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
         """Yields SSE-shaped events as adapters report offers."""
         started = time.perf_counter()
+        clarification_task = asyncio.create_task(check_and_clarify_query(query))
+        
         normalized = await normalize_query(query, fix=not nofix, cache=self._cache)
         yield "query_normalized", normalized.model_dump()
+
+        try:
+            clarification = await clarification_task
+            yield "query_clarified", clarification.model_dump(mode="json")
+        except Exception as exc:
+            log.warning("orchestrator.clarification_stream_failed", error=str(exc))
 
         adapters = self._pick(sources)
         queue: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()

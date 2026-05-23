@@ -1,11 +1,11 @@
 import { DEFAULT_REGION_ID } from "./regions";
 import type {
   ChatResponse, Favorite, NormalizedQuery, ProductOffer, RankedOffer,
-  SearchResponse, Source, User,
+  SearchResponse, Source, User, QueryClarification,
 } from "./types";
 
 type SearchStreamEventName =
-  | "query_normalized" | "source_started" | "offer"
+  | "query_normalized" | "query_clarified" | "source_started" | "offer"
   | "source_finished" | "top_deals" | "done";
 
 export interface SourceFinishedEvent {
@@ -20,6 +20,7 @@ export interface SourceFinishedEvent {
 
 export interface SearchStreamHandlers {
   onQueryNormalized?: (q: NormalizedQuery) => void;
+  onQueryClarified?: (c: QueryClarification) => void;
   onSourceStarted?: (e: { source: Source }) => void;
   onOffer?: (e: { source: Source; offer: ProductOffer }) => void;
   onSourceFinished?: (e: SourceFinishedEvent) => void;
@@ -130,6 +131,7 @@ export const api = {
     };
 
     wire<NormalizedQuery>("query_normalized", handlers.onQueryNormalized);
+    wire<QueryClarification>("query_clarified", handlers.onQueryClarified);
     wire<{ source: Source }>("source_started", handlers.onSourceStarted);
     wire<{ source: Source; offer: ProductOffer }>("offer", handlers.onOffer);
     wire<SourceFinishedEvent>("source_finished", handlers.onSourceFinished);

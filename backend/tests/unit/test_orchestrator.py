@@ -91,7 +91,7 @@ async def test_run_merges_four_sources_and_isolates_crash() -> None:
     }
     orch = SearchOrchestrator(adapters=adapters)
 
-    normalized, groups, _ = await orch.run("iphone", max_per_source=10)
+    normalized, groups, _, _ = await orch.run("iphone", max_per_source=10)
 
     assert normalized.normalized == "iphone"
     by_src = {g.source: g for g in groups}
@@ -137,7 +137,7 @@ async def test_top_deals_are_ranked_descending_by_score() -> None:
         SourceKind.RUNET: _Stub(SourceKind.RUNET, offers=[]),
     }
     orch = SearchOrchestrator(adapters=adapters)
-    _, _, top = await orch.run("anything", max_per_source=10)
+    _, _, top, _ = await orch.run("anything", max_per_source=10)
     assert len(top) == 3
     # Strictly decreasing scores; rank matches order.
     assert [r.rank for r in top] == [1, 2, 3]
@@ -159,7 +159,7 @@ async def test_runet_empty_stays_empty_without_marketplace_fallback() -> None:
     }
     orch = SearchOrchestrator(adapters=adapters)
 
-    _, groups, _ = await orch.run("anything", max_per_source=5)
+    _, groups, _, _ = await orch.run("anything", max_per_source=5)
     runet = next(g for g in groups if g.source == SourceKind.RUNET)
     assert runet.count == 0
     assert runet.error is None
@@ -174,7 +174,7 @@ async def test_wb_error_serves_stale_cache() -> None:
     }
     orch = SearchOrchestrator(adapters=adapters, cache=cache)
 
-    _, groups, _ = await orch.run("cached", max_per_source=5, sources=[SourceKind.WB])
+    _, groups, _, _ = await orch.run("cached", max_per_source=5, sources=[SourceKind.WB])
 
     group = groups[0]
     assert group.source == SourceKind.WB
