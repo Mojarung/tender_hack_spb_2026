@@ -1,0 +1,33 @@
+[project]
+name = "wb-research"
+version = "0.1.0"
+description = "Isolated sandbox for Wildberries scraping experiments — separate uv venv, no overlap with the main backend project."
+readme = "README.md"
+requires-python = ">=3.13"
+
+dependencies = [
+    # Public WB JSON API works with plain HTTP — no TLS impersonation
+    # needed (unlike Ozon). httpx with http2 is the production choice.
+    "httpx[http2]>=0.28",
+
+    # curl_cffi kept as plan-B for when WB starts checking JA3 and
+    # plain httpx 403s. Same lib we use for Ozon.
+    "curl_cffi>=0.11",
+
+    # Fast JSON.
+    "orjson>=3.10",
+
+    # tenacity for backoff (mirrors prod wb.py behavior).
+    "tenacity>=9.0",
+
+    # nodriver — CDP-direct stealth browser. Used by 11_browser_warmer
+    # to bypass WB's PG-41 anti-bot challenge: we open a real headed
+    # Chrome, let JS compute the x-pow token, export cookies, then
+    # reuse them in plain httpx/curl_cffi. Same lib + same pattern as
+    # the production Ozon path in backend/.
+    "nodriver>=0.50",
+]
+
+# Pure-script project — no `wb_research` package to build/install.
+[tool.uv]
+package = false
