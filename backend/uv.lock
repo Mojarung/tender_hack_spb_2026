@@ -2337,6 +2337,7 @@ requires-dist = [
     { name = "nodriver", marker = "extra == 'stealth'", specifier = ">=0.50" },
     { name = "opencv-python-headless", marker = "extra == 'captcha'", specifier = ">=4.10" },
     { name = "orjson", specifier = ">=3.10" },
+    { name = "playwright", specifier = ">=1.49" },
     { name = "prometheus-client", specifier = ">=0.22" },
     { name = "prometheus-fastapi-instrumentator", specifier = ">=7.1" },
     { name = "pydantic", specifier = ">=2.10" },

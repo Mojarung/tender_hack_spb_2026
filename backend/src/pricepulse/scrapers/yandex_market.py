@@ -14,11 +14,12 @@ from __future__ import annotations
 
 import html as html_lib
 import json
+import os
 import re
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
-from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import orjson
 import structlog
@@ -634,7 +635,7 @@ def _is_market_json_response_url(url: str, content_type: str, resource_type: str
     return has_json and resource_type in {"fetch", "xhr"}
 
 
-def _candidate_to_offer(c: dict[str, Any]) -> ProductOffer | None:
+def _candidate_to_offer(c: dict[str, Any], *, region_id: int = 213) -> ProductOffer | None:
     title = _extract_title(c)
     price_f = _extract_price(c)
     url = _extract_url(c)
@@ -656,11 +657,12 @@ def _candidate_to_offer(c: dict[str, Any]) -> ProductOffer | None:
         chars["brand"] = brand
     if reviews is not None:
         chars["feedbacks"] = str(reviews)
+    offer_url = build_region_url(url, region_id=region_id) if url else build_search_url(title, region_id=region_id)
     return ProductOffer(
         source=SourceKind.YA_MARKET,
         name=title,
         price=price,
-        url=url or f"https://market.yandex.ru/search?text={quote(title)}",
+        url=offer_url,
         image=_extract_candidate_image(c),
         characteristics=chars,
         rating=_extract_rating(c),
@@ -717,7 +719,7 @@ class YandexMarketScraper:
 
             # L2: Playwright XHR interception
             try:
-                l2 = await self._playwright_search(query, limit)
+                l2 = await self._playwright_search(query, limit, region_id=region_id)
             except Exception as exc:
                 log.warning("ya_market.l2_failed", error=str(exc))
                 l2 = []
@@ -767,25 +769,37 @@ class YandexMarketScraper:
 
     # ─────────────────────────────── L2 ──────────────────────────────────────
 
-    async def _playwright_search(self, query: NormalizedQuery, limit: int) -> list[ProductOffer]:
+    async def _playwright_search(
+        self,
+        query: NormalizedQuery,
+        limit: int,
+        *,
+        region_id: int = 213,
+    ) -> list[ProductOffer]:
         try:
             from playwright.async_api import async_playwright
         except ImportError:
             log.warning("ya_market.playwright_not_installed")
             return []
 
-        search_url = f"{_BASE}/search?text={quote(query.normalized or query.raw)}"
+        search_url = build_search_url(query.normalized or query.raw, region_id=region_id)
         payloads: list[dict[str, Any]] = []
 
         async with async_playwright() as pw:
-            browser = await pw.chromium.launch(
-                headless=True,
-                args=[
+            launch_kwargs: dict[str, Any] = {
+                "headless": True,
+                "args": [
                     "--disable-blink-features=AutomationControlled",
                     "--disable-dev-shm-usage",
                     "--no-first-run",
                     "--no-sandbox",
                 ],
+            }
+            executable = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE")
+            if executable and os.path.exists(executable):
+                launch_kwargs["executable_path"] = executable
+            browser = await pw.chromium.launch(
+                **launch_kwargs,
             )
             ctx = await browser.new_context(
                 locale="ru-RU",
@@ -798,6 +812,10 @@ class YandexMarketScraper:
                 extra_http_headers={"accept-language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7"},
             )
             await ctx.add_init_script(_INIT_SCRIPT)
+            await ctx.add_cookies([
+                {"name": name, "value": value, "domain": ".yandex.ru", "path": "/"}
+                for name, value in build_region_cookies(region_id=region_id).items()
+            ])
             page = await ctx.new_page()
 
             async def on_response(response: Any) -> None:
@@ -837,20 +855,20 @@ class YandexMarketScraper:
         # From XHR JSON payloads
         for payload in payloads:
             for candidate in extract_candidates(payload):
-                o = _candidate_to_offer(candidate)
+                o = _candidate_to_offer(candidate, region_id=region_id)
                 if o:
                     _add(o)
 
         # From HTML: JSON-LD blocks
         for block in _ldjson_blocks(html_content):
             for p in _walk_ldjson([block]):
-                o = _to_offer(p)
+                o = _to_offer(p, region_id=region_id)
                 if o:
                     _add(o)
 
         # From HTML: data-zone-data="productSnippet"
         for candidate in _extract_html_candidates(html_content):
-            o = _candidate_to_offer(candidate)
+            o = _candidate_to_offer(candidate, region_id=region_id)
             if o:
                 _add(o)
 
