@@ -15,6 +15,9 @@ class RedisCache:
     def __init__(self, url: str) -> None:
         self._redis: Redis = Redis.from_url(url, decode_responses=False)
 
+    async def ping(self) -> bool:
+        return bool(await self._redis.ping())
+
     async def get(self, key: str) -> dict | list | None:
         raw = await self._redis.get(key)
         return orjson.loads(raw) if raw else None

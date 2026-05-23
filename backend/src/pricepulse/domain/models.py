@@ -44,6 +44,11 @@ class SearchRequest(BaseModel):
     query: str
     max_per_source: int = Field(default=10, ge=1, le=50)
     sources: list[SourceKind] | None = None
+    region_id: int = Field(
+        default=213,
+        ge=1,
+        description="Yandex Market lr region id. Default 213 is Moscow.",
+    )
     nofix: bool = Field(
         default=False,
         description="Skip typo correction and RU→EN translit — search the raw cleaned text.",

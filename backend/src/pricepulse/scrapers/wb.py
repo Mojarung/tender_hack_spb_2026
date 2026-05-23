@@ -130,6 +130,8 @@ class WildberriesScraper:
         query: NormalizedQuery,
         limit: int,
         on_offer: OnOffer | None = None,
+        *,
+        region_id: int = 213,
     ) -> ScrapeResult:
         params = _params(query.normalized or query.raw, page=1, dest=self._dest)
 

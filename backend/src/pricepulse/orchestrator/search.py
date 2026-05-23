@@ -35,12 +35,12 @@ from pricepulse.scrapers.yandex_market import YandexMarketScraper
 
 log = structlog.get_logger(__name__)
 
-# TTLs per source — anti-bot.md §9. WB updates faster than the rest.
+# TTLs per source. Keep live-demo prices stable without hiding fresh data for too long.
 _CACHE_TTL: dict[SourceKind, int] = {
-    SourceKind.WB: 60 * 60,           # 1h
-    SourceKind.OZON: 6 * 60 * 60,     # 6h
-    SourceKind.YA_MARKET: 6 * 60 * 60,
-    SourceKind.RUNET: 12 * 60 * 60,
+    SourceKind.WB: 15 * 60,
+    SourceKind.OZON: 15 * 60,
+    SourceKind.YA_MARKET: 15 * 60,
+    SourceKind.RUNET: 15 * 60,
 }
 
 
@@ -94,12 +94,16 @@ class SearchOrchestrator:
         max_per_source: int,
         sources: list[SourceKind] | None = None,
         *,
+        region_id: int = 213,
         nofix: bool = False,
     ) -> tuple[NormalizedQuery, list[SourceGroup], list[RankedOffer]]:
         normalized = await normalize_query(query, fix=not nofix)
         adapters = self._pick(sources)
         results = await asyncio.gather(
-            *[self._safe_call(a, normalized, max_per_source) for a in adapters]
+            *[
+                self._safe_call(a, normalized, max_per_source, region_id=region_id)
+                for a in adapters
+            ]
         )
         groups = [_to_group(r) for r in results]
         top_deals = _rank_top_deals(groups, top_k=10)
@@ -110,6 +114,7 @@ class SearchOrchestrator:
         query: str,
         max_per_source: int,
         sources: list[SourceKind] | None = None,
+        region_id: int = 213,
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
         """Yields SSE-shaped events as adapters report offers."""
         started = time.perf_counter()
@@ -128,7 +133,13 @@ class SearchOrchestrator:
                     {"source": adapter.source.value, "offer": offer.model_dump(mode="json")},
                 ))
 
-            result = await self._safe_call(adapter, normalized, max_per_source, on_offer=on_offer)
+            result = await self._safe_call(
+                adapter,
+                normalized,
+                max_per_source,
+                on_offer=on_offer,
+                region_id=region_id,
+            )
             group = _to_group(result)
             await queue.put((
                 "source_finished",
@@ -168,12 +179,16 @@ class SearchOrchestrator:
         normalized: NormalizedQuery,
         limit: int,
         on_offer=None,
+        region_id: int = 213,
     ) -> ScrapeResult:
-        cache_key = f"cache:{adapter.source.value}:{normalized.normalized}:{limit}"
+        cache_key = f"cache:{adapter.source.value}:{region_id}:{normalized.normalized}:{limit}"
         if self._cache is not None:
             cached = await self._cache.get(cache_key)
             if cached:
-                offers = [ProductOffer.model_validate(o) for o in cached.get("offers", [])]
+                offers = [
+                    ProductOffer.model_validate(o).model_copy(update={"cached": True})
+                    for o in cached.get("offers", [])
+                ]
                 if on_offer is not None:
                     for o in offers:
                         await on_offer(o)
@@ -185,7 +200,12 @@ class SearchOrchestrator:
         )
 
         try:
-            result = await adapter.search(normalized, limit=limit, on_offer=on_offer)
+            result = await adapter.search(
+                normalized,
+                limit=limit,
+                on_offer=on_offer,
+                region_id=region_id,
+            )
         except Exception as exc:  # never propagate — isolate sources
             log.warning("orchestrator.adapter_crash",
                         source=adapter.source.value, error=str(exc))
@@ -193,7 +213,7 @@ class SearchOrchestrator:
             if adapter.source == SourceKind.RUNET:
                 try:
                     result = await self._runet_fallback.search(
-                        normalized, limit=limit, on_offer=on_offer
+                        normalized, limit=limit, on_offer=on_offer, region_id=region_id
                     )
                 except Exception as fb_exc:
                     return ScrapeResult(
@@ -206,7 +226,7 @@ class SearchOrchestrator:
         # If primary RunetScraper returned nothing, try Megamarket
         if adapter.source == SourceKind.RUNET and not result.offers and not result.error:
             result = await self._runet_fallback.search(
-                normalized, limit=limit, on_offer=on_offer
+                normalized, limit=limit, on_offer=on_offer, region_id=region_id
             )
 
         # Synonym retry — an empty (not blocked) result is often just a
@@ -223,7 +243,9 @@ class SearchOrchestrator:
                 source=adapter.source.value, alt=alt.normalized,
             )
             try:
-                alt_result = await adapter.search(alt, limit=limit, on_offer=on_offer)
+                alt_result = await adapter.search(
+                    alt, limit=limit, on_offer=on_offer, region_id=region_id
+                )
             except Exception as exc:
                 log.warning("orchestrator.synonym_retry_failed", error=str(exc))
             else:

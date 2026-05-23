@@ -105,6 +105,8 @@ class RunetScraper:
         query: NormalizedQuery,
         limit: int,
         on_offer: OnOffer | None = None,
+        *,
+        region_id: int = 213,
     ) -> ScrapeResult:
         settings = get_settings()
         if not settings.firecrawl_api_key:
