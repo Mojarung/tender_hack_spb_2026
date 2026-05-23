@@ -67,7 +67,7 @@ _L1_HEADERS = {
 
 _SPEC_SPLIT_RE = re.compile(r'data-auto="product-spec"')
 
-_MAX_SPEC_ENRICHMENTS = 5
+_MAX_SPEC_ENRICHMENTS = 10 ** 6
 
 # ──────────────────────────────────────── L1 helpers ─────────────────────────
 
@@ -92,28 +92,41 @@ def build_region_cookies(*, region_id: int = 213) -> dict[str, str]:
 def _parse_specs_from_product_html(html: str) -> dict[str, str]:
     """Extract characteristics from a Yandex Market product page HTML.
 
-    Parses <div aria-label="Характеристики"> rows identified by
-    data-auto="product-spec" (name) and class="b2ZT4" (value).
+    The page contains two aria-label="Характеристики" containers:
+    - first: collapsed preview (~5 specs)
+    - second: full spec table (~30+ specs)
+    We iterate all occurrences so later (fuller) values overwrite earlier ones.
     """
     result: dict[str, str] = {}
-    idx = html.find('aria-label="Характеристики"')
-    if idx == -1:
-        return result
-    chars_html = html[idx : idx + 200_000]
-    for seg in _SPEC_SPLIT_RE.split(chars_html)[1:]:
-        nm = re.match(r'[^>]*>([^<]+)</span>', seg[:500])
-        if not nm:
-            continue
-        name = _clean_text(html_lib.unescape(nm.group(1)))
-        if not name:
-            continue
-        vm = re.search(r'class="b2ZT4"[^>]*>(.*?)</div>', seg[:3000], re.DOTALL)
-        if not vm:
-            continue
-        value = _clean_text(html_lib.unescape(re.sub(r'<[^>]+>', ' ', vm.group(1))))
-        if value:
-            result[name] = value
+    search_from = 0
+    while True:
+        idx = html.find('aria-label="Характеристики"', search_from)
+        if idx == -1:
+            break
+        chars_html = html[idx : idx + 200_000]
+        for seg in _SPEC_SPLIT_RE.split(chars_html)[1:]:
+            nm = re.match(r'[^>]*>([^<]+)</span>', seg[:500])
+            if not nm:
+                continue
+            name = _clean_text(html_lib.unescape(nm.group(1)))
+            if not name:
+                continue
+            vm = re.search(r'class="b2ZT4"[^>]*>(.*?)</div>', seg[:3000], re.DOTALL)
+            if not vm:
+                continue
+            value = _clean_text(html_lib.unescape(re.sub(r'<[^>]+>', ' ', vm.group(1))))
+            if value:
+                result[name] = value
+        search_from = idx + 1
     return result
+
+
+def _clean_product_url(url: str) -> str:
+    """Strip tracking/redirect params — keep only scheme+host+path for /card/ URLs."""
+    parts = urlsplit(url)
+    if "/card/" in parts.path:
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+    return url
 
 
 async def _http_fetch_product_specs(url: str, *, timeout_s: float = 6.0) -> dict[str, str]:
@@ -121,9 +134,10 @@ async def _http_fetch_product_specs(url: str, *, timeout_s: float = 6.0) -> dict
         from curl_cffi.requests import AsyncSession
     except ImportError:
         return {}
+    clean = _clean_product_url(url)
     try:
         async with AsyncSession(impersonate="chrome131", timeout=timeout_s) as s:
-            resp = await s.get(url, headers=_L1_HEADERS)
+            resp = await s.get(clean, headers=_L1_HEADERS)
         if resp.status_code != 200 or "showcaptcha" in str(resp.url):
             return {}
         return _parse_specs_from_product_html(resp.text)
