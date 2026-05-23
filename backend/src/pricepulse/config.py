@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     api_host: str = "0.0.0.0"  # noqa: S104
     api_port: int = 8000
-    api_cors_origins: str = "http://localhost:3000"
+    api_cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000,http://85.193.89.114:3000"
 
     # Base host the browser uses to reach our admin landing page links.
     # Override per-environment (e.g. https://admin.pricepulse.team in prod).
