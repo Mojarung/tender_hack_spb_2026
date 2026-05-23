@@ -118,38 +118,6 @@ services:
       start_period: 120s    # SAGE T5 takes ~15-30s to load on first boot
     restart: unless-stopped
 
-  # ===== Observability: Prometheus + Grafana + node/container exporters =====
-  prometheus:
-    image: prom/prometheus:v3.0.1
-    command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.retention.time=24h
-      - --storage.tsdb.retention.size=512MB
-      - --web.enable-lifecycle
-    volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - promdata:/prometheus
-    ports:
-      - "9090:9090"
-    networks: [pricepulse]
-
-  grafana:
-    image: grafana/grafana:11.4.0
-    environment:
-      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-hackathon}
-      GF_AUTH_ANONYMOUS_ENABLED: "true"
-      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
-      GF_USERS_DEFAULT_THEME: dark
-    volumes:
-      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
-      - grafanadata:/var/lib/grafana
-    ports:
-      - "3000:3000"
-    depends_on: [prometheus]
-    networks: [pricepulse]
-
   node-exporter:
     image: prom/node-exporter:v1.8.2
     pid: host
@@ -346,7 +314,6 @@ volumes:
   pgdata:
   miniodata:
   promdata:
-  grafanadata:
   n8ndata:
   ollamadata:
   ntfydata:

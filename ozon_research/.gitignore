@@ -14,3 +14,8 @@ _out/*.json
 _out/*.png
 _out/*.csv
 !_out/.gitkeep
+
+# Ad-hoc debug captures (screenshots / pasted error logs).
+log*.png
+error*.txt
+*.log

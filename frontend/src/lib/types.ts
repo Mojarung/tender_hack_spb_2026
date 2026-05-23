@@ -7,6 +7,12 @@ export const SOURCE_LABEL: Record<Source, string> = {
   runet: "Рунет",
 };
 
+export interface ProductReview {
+  author: string | null;
+  score: number | null;
+  text: string;
+}
+
 export interface ProductOffer {
   source: Source;
   name: string;
@@ -14,9 +20,14 @@ export interface ProductOffer {
   currency: string;
   url: string;
   image: string | null;
+  // Full product gallery (modal carousel). `image` is the cover thumbnail.
+  // Other sources may return [] until they implement enrichment.
+  images: string[];
   characteristics: Record<string, string>;
   seller: string | null;
   rating: number | null;
+  reviews: ProductReview[];
+  reviews_count: number | null;
   fetched_at: string;
   cached: boolean;
 }

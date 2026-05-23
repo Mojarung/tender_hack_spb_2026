@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     api_host: str = "0.0.0.0"  # noqa: S104
     api_port: int = 8000
-    api_cors_origins: str = "http://localhost:3000"
+    api_cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000,http://85.193.89.114:3000"
 
     # Base host the browser uses to reach our admin landing page links.
     # Override per-environment (e.g. https://admin.pricepulse.team in prod).
@@ -36,6 +36,22 @@ class Settings(BaseSettings):
     # false on a desktop/xvfb box for the strongest anti-detect profile.
     browser_headless: bool = True
 
+    # Persistent Chrome profile for the Ozon stealth browser. Cookies
+    # (abt_data, __Secure-ext_xcid, etc.) survive container restarts so
+    # the first-request anti-bot challenge is paid once per profile,
+    # not once per process. Bind a Docker volume here in prod.
+    ozon_profile_dir: str = "var/profiles/ozon"
+    # How long warmed cookies stay valid in-process before we re-launch
+    # the browser to refresh them. Empirically Ozon rotates these in
+    # 24–72 h; 12 h is a safe default.
+    ozon_cookie_ttl_sec: int = 12 * 3600
+    # Override the Chrome binary path if auto-detect picks the wrong one
+    # (e.g. Yandex Browser on the dev machine).
+    ozon_browser_path: str = ""
+
+    # WB rpm намеренно снижен по результатам experiments/wb_research:
+    # safe-rate probe ловил 429 уже на 6 RPM с одного IP, поэтому
+    # держим бюджет консервативно низким.
     wb_rpm: int = 6
     ozon_rpm: int = 20
     yandex_market_rpm: int = 10

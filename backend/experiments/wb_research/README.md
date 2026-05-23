@@ -1,7 +1,7 @@
 # Wildberries research — проверка anti-bot техник из Ozon
 
 Это изолированная песочница для проверки, можно ли подходы из
-`experiments/ozon_research` применить к Wildberries.
+`ozon_research/` применить к Wildberries.
 
 ## Вывод на старте
 
