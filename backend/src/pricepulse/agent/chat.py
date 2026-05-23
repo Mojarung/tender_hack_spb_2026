@@ -204,6 +204,9 @@ class ChatEngine:
         settings = get_settings()
         self._url = settings.ollama_url.rstrip("/") + "/api/chat"
         self._model = settings.ollama_vision_model
+        self._headers = {}
+        if settings.ollama_api_key:
+            self._headers["Authorization"] = f"Bearer {settings.ollama_api_key}"
 
     async def _load_history(self, session_id: str | None) -> list[ChatMessage]:
         if not session_id or self._redis is None:
@@ -238,7 +241,7 @@ class ChatEngine:
         tool_log: list[dict] = []
         tool_specs = [_tool_spec_for_ollama(t) for t in TOOLS.values()]
 
-        async with httpx.AsyncClient(timeout=120) as client:
+        async with httpx.AsyncClient(headers=self._headers, timeout=120) as client:
             for round_idx in range(max_tool_rounds + 1):
                 payload = {
                     "model": self._model,

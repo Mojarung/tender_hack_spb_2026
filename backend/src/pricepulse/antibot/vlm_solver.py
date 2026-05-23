@@ -73,8 +73,12 @@ class VLMSolver:
         from pricepulse.config import get_settings
 
         settings = get_settings()
+        headers = {}
+        if settings.ollama_api_key:
+            headers["Authorization"] = f"Bearer {settings.ollama_api_key}"
         self._client = httpx.AsyncClient(
             base_url=base_url or settings.ollama_url,
+            headers=headers,
             timeout=timeout_s,
         )
         self._model = model or settings.ollama_vision_model

@@ -7,6 +7,7 @@ import pytest
 import respx
 from httpx import AsyncClient
 
+from pricepulse.config import get_settings
 from pricepulse.enrichment.image_query import ImageQueryError, ImageQueryExtractor, image_hash
 
 _PNG = base64.b64decode(
@@ -14,19 +15,21 @@ _PNG = base64.b64decode(
 )
 
 
+def _generate_url() -> str:
+    return get_settings().ollama_url.rstrip("/") + "/api/generate"
+
+
 @respx.mock
 @pytest.mark.asyncio
 async def test_image_query_extractor_calls_ollama_and_parses_json() -> None:
-    route = respx.post("http://ollama:11434/api/chat").mock(
+    route = respx.post(_generate_url()).mock(
         return_value=httpx.Response(
             200,
             json={
-                "message": {
-                    "content": (
-                        '{"query":"черные кроссовки adidas","confidence":0.82,'
-                        '"brand":"adidas","color":"black","alternatives":["кроссовки adidas"]}'
-                    )
-                }
+                "response": (
+                    '{"query":"черные кроссовки adidas","confidence":0.82,'
+                    '"brand":"adidas","color":"black","alternatives":["кроссовки adidas"]}'
+                )
             },
         )
     )
@@ -41,7 +44,11 @@ async def test_image_query_extractor_calls_ollama_and_parses_json() -> None:
     assert route.called
     request = route.calls.last.request
     assert request is not None
-    assert request.headers.get("authorization") is None
+    expected_key = get_settings().ollama_api_key
+    if expected_key:
+        assert request.headers.get("authorization") == f"Bearer {expected_key}"
+    else:
+        assert request.headers.get("authorization") is None
     assert image_hash(_PNG)
 
 
@@ -54,8 +61,8 @@ async def test_image_query_extractor_rejects_unsupported_type() -> None:
 @respx.mock
 @pytest.mark.asyncio
 async def test_image_query_extractor_rejects_bad_model_json() -> None:
-    respx.post("http://ollama:11434/api/chat").mock(
-        return_value=httpx.Response(200, json={"message": {"content": "not json"}}),
+    respx.post(_generate_url()).mock(
+        return_value=httpx.Response(200, json={"response": "{}"}),
     )
 
     with pytest.raises(ImageQueryError, match="invalid image query JSON"):
@@ -64,14 +71,25 @@ async def test_image_query_extractor_rejects_bad_model_json() -> None:
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_image_query_extractor_falls_back_to_plain_text_query() -> None:
+    respx.post(_generate_url()).mock(
+        return_value=httpx.Response(200, json={"response": "Поисковый запрос: черный офисный принтер"}),
+    )
+
+    result = await ImageQueryExtractor(cache=None).describe(_PNG, "image/png")
+
+    assert result.query == "черный офисный принтер"
+    assert result.confidence == 0.35
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_image_query_extractor_accepts_markdown_json() -> None:
-    respx.post("http://ollama:11434/api/chat").mock(
+    respx.post(_generate_url()).mock(
         return_value=httpx.Response(
             200,
             json={
-                "message": {
-                    "content": '```json\n{"query":"офисный принтер","confidence":0.7,"alternatives":[]}\n```'
-                }
+                "response": '```json\n{"query":"офисный принтер","confidence":0.7,"alternatives":[]}\n```'
             },
         ),
     )
@@ -85,8 +103,8 @@ async def test_image_query_extractor_accepts_markdown_json() -> None:
 @respx.mock
 @pytest.mark.asyncio
 async def test_image_query_extractor_defaults_missing_confidence() -> None:
-    respx.post("http://ollama:11434/api/chat").mock(
-        return_value=httpx.Response(200, json={"message": {"content": '{"query":"красные кроссовки"}'}}),
+    respx.post(_generate_url()).mock(
+        return_value=httpx.Response(200, json={"response": '{"query":"красные кроссовки"}'}),
     )
 
     result = await ImageQueryExtractor(cache=None).describe(_PNG, "image/png")
@@ -98,10 +116,10 @@ async def test_image_query_extractor_defaults_missing_confidence() -> None:
 @respx.mock
 @pytest.mark.asyncio
 async def test_image_describe_endpoint(client: AsyncClient) -> None:
-    respx.post("http://ollama:11434/api/chat").mock(
+    respx.post(_generate_url()).mock(
         return_value=httpx.Response(
             200,
-            json={"message": {"content": '{"query":"лазерный принтер hp","confidence":0.76,"alternatives":[]}'}},
+            json={"response": '{"query":"лазерный принтер hp","confidence":0.76,"alternatives":[]}'},
         ),
     )
 

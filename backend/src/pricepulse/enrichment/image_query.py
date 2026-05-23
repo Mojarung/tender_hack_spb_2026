@@ -6,10 +6,12 @@ search pipeline then handles normalization, scraping, grouping and ranking.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import time
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 import httpx
 import orjson
@@ -49,6 +51,11 @@ _SYSTEM = (
 )
 
 _PROMPT = "Сформируй marketplace search query по изображению товара. Верни только JSON."
+
+_JSON_INSTRUCTION = (
+    'Ответ должен быть одним JSON-объектом без markdown: '
+    '{"query":"черный лазерный принтер hp","confidence":0.8,"alternatives":["принтер hp"]}'
+)
 
 
 class ImageQueryResult(BaseModel):
@@ -95,6 +102,14 @@ class ImageQueryExtractor:
         self._validate_image(image, content_type)
 
         digest = image_hash(image)
+        log.info(
+            "image_query.start",
+            image_sha256=digest[:12],
+            content_type=content_type,
+            size_bytes=len(image),
+            model=self._settings.ollama_vision_model,
+            ollama_host=urlparse(self._settings.ollama_url).netloc,
+        )
         cache_key = f"image_query:v1:{self._settings.ollama_vision_model}:{digest}"
         if self._cache is not None:
             try:
@@ -103,12 +118,20 @@ class ImageQueryExtractor:
                 log.debug("image_query.cache_get_failed", error=str(exc))
             else:
                 if cached:
+                    log.info("image_query.cache_hit", image_sha256=digest[:12])
                     return ImageQueryResult.model_validate(cached).model_copy(
                         update={"cached": True, "took_ms": int((time.perf_counter() - started) * 1000)}
                     )
 
         result = await self._call_ollama(image)
         result = result.model_copy(update={"took_ms": int((time.perf_counter() - started) * 1000), "cached": False})
+        log.info(
+            "image_query.success",
+            image_sha256=digest[:12],
+            query=result.query,
+            confidence=result.confidence,
+            took_ms=result.took_ms,
+        )
 
         if self._cache is not None and result.confidence >= 0.4:
             try:
@@ -135,39 +158,109 @@ class ImageQueryExtractor:
             headers["Authorization"] = f"Bearer {self._settings.ollama_api_key}"
         body = {
             "model": self._settings.ollama_vision_model,
-            "messages": [
-                {"role": "system", "content": _SYSTEM},
-                {
-                    "role": "user",
-                    "content": _PROMPT,
-                    "images": [base64.b64encode(image).decode("ascii")],
-                },
-            ],
+            "prompt": f"{_SYSTEM}\n\n{_PROMPT}\n{_JSON_INSTRUCTION}",
+            "images": [base64.b64encode(image).decode("ascii")],
             "stream": False,
-            "format": _SCHEMA,
+            "format": "json",
             "options": {"temperature": 0.2, "top_p": 0.95, "top_k": 64, "num_predict": 220},
             "keep_alive": "5m",
         }
         try:
-            async with httpx.AsyncClient(
-                base_url=self._settings.ollama_url.rstrip("/"),
-                headers=headers,
-                timeout=90.0,
-            ) as client:
-                response = await client.post("/api/chat", json=body)
-                response.raise_for_status()
+            response = await self._post_generate_with_retry(headers, body)
         except httpx.HTTPError as exc:
             raise ImageQueryError(f"ollama request failed: {exc}") from exc
 
-        payload = response.json()
-        content = ((payload.get("message") or {}).get("content") or "").strip()
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            log.warning(
+                "image_query.ollama_invalid_http_json",
+                status_code=response.status_code,
+                body=response.text[:1000],
+            )
+            raise ImageQueryError("ollama returned invalid response JSON") from exc
+        content = (payload.get("response") or (payload.get("message") or {}).get("content") or "").strip()
         if not content:
+            log.warning(
+                "image_query.ollama_empty_response",
+                status_code=response.status_code,
+                payload_keys=list(payload.keys()),
+            )
             raise ImageQueryError("ollama returned empty response")
         try:
             parsed = orjson.loads(_extract_json_object(content))
+            if isinstance(parsed, str):
+                parsed = {"query": parsed, "confidence": 0.35, "alternatives": []}
             return ImageQueryResult.model_validate(parsed)
         except (orjson.JSONDecodeError, ValidationError) as exc:
+            log.warning(
+                "image_query.ollama_invalid_model_json",
+                response_snippet=content[:1000],
+                error=str(exc),
+            )
+            fallback = _fallback_text_query(content)
+            if fallback is not None:
+                log.info("image_query.fallback_plain_text", query=fallback.query)
+                return fallback
             raise ImageQueryError("ollama returned invalid image query JSON") from exc
+
+    async def _post_generate_with_retry(self, headers: dict[str, str], body: dict[str, Any]) -> httpx.Response:
+        last_exc: httpx.HTTPError | None = None
+        retry_statuses = {502, 503, 504}
+        upstream = self._settings.ollama_url.rstrip("/")
+        for attempt in range(3):
+            try:
+                log.info(
+                    "image_query.ollama_request",
+                    attempt=attempt + 1,
+                    ollama_host=urlparse(upstream).netloc,
+                    model=body.get("model"),
+                )
+                async with httpx.AsyncClient(
+                    base_url=upstream,
+                    headers={**headers, "Connection": "close"},
+                    limits=httpx.Limits(max_keepalive_connections=0, max_connections=5),
+                    timeout=90.0,
+                ) as client:
+                    response = await client.post("/api/generate", json=body)
+                    if response.status_code in retry_statuses and attempt < 2:
+                        log.warning(
+                            "image_query.ollama_retryable_status",
+                            attempt=attempt + 1,
+                            status_code=response.status_code,
+                            body=response.text[:1000],
+                        )
+                        await asyncio.sleep(0.4 * (attempt + 1))
+                        continue
+                    if response.is_error:
+                        log.warning(
+                            "image_query.ollama_http_error",
+                            attempt=attempt + 1,
+                            status_code=response.status_code,
+                            body=response.text[:1000],
+                        )
+                    response.raise_for_status()
+                    log.info(
+                        "image_query.ollama_response",
+                        attempt=attempt + 1,
+                        status_code=response.status_code,
+                        response_bytes=len(response.content),
+                    )
+                    return response
+            except (httpx.RemoteProtocolError, httpx.ReadError, httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                last_exc = exc
+                log.warning(
+                    "image_query.ollama_transport_error",
+                    attempt=attempt + 1,
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                )
+                if attempt == 2:
+                    break
+                await asyncio.sleep(0.4 * (attempt + 1))
+        if last_exc is not None:
+            raise last_exc
+        raise ImageQueryError("ollama request failed after retries")
 
 
 def _extract_json_object(content: str) -> str:
@@ -185,6 +278,28 @@ def _extract_json_object(content: str) -> str:
     if start == -1 or end == -1 or end < start:
         return stripped
     return stripped[start : end + 1]
+
+
+def _fallback_text_query(content: str) -> ImageQueryResult | None:
+    """Keep image search usable when Gemma ignores JSON mode."""
+    query = content.strip().strip('"\'`')
+    if query.startswith(("{", "[")):
+        return None
+    prefixes = (
+        "query:",
+        "поисковый запрос:",
+        "запрос:",
+        "search query:",
+    )
+    lowered = query.lower()
+    for prefix in prefixes:
+        if lowered.startswith(prefix):
+            query = query[len(prefix) :].strip().strip('"\'`')
+            break
+    query = " ".join(query.replace("\r", " ").replace("\n", " ").split())
+    if not query or len(query) > 160:
+        return None
+    return ImageQueryResult(query=query, confidence=0.35, alternatives=[])
 
 
 __all__ = [
