@@ -1,6 +1,6 @@
 import { DEFAULT_REGION_ID } from "./regions";
 import type {
-  ChatResponse, Favorite, NormalizedQuery, ProductOffer, RankedOffer,
+  ChatResponse, Favorite, ImageQueryResponse, NormalizedQuery, ProductOffer, RankedOffer,
   SearchResponse, Source, User,
 } from "./types";
 
@@ -106,6 +106,28 @@ export const api = {
         region_id: opts?.region_id ?? DEFAULT_REGION_ID,
       }),
     }),
+
+  describeImage: async (file: File): Promise<ImageQueryResponse> => {
+    const form = new FormData();
+    form.append("image", file);
+    const headers: Record<string, string> = { Accept: "application/json" };
+    const t = getToken();
+    if (t) headers.Authorization = `Bearer ${t}`;
+    const res = await fetch(`${BASE}/api/v1/search/image/describe`, {
+      method: "POST",
+      headers,
+      body: form,
+    });
+    if (!res.ok) {
+      let detail = "";
+      try {
+        const body = await res.json();
+        detail = typeof body?.detail === "string" ? body.detail : JSON.stringify(body).slice(0, 200);
+      } catch { /* not json */ }
+      throw new Error(detail || `${res.status} ${res.statusText}`);
+    }
+    return (await res.json()) as ImageQueryResponse;
+  },
 
   searchStream: (
     query: string,

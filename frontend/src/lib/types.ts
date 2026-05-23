@@ -91,6 +91,19 @@ export interface SearchResponse {
   partial: boolean;
 }
 
+export interface ImageQueryResponse {
+  query: string;
+  confidence: number;
+  category?: string | null;
+  brand?: string | null;
+  model?: string | null;
+  color?: string | null;
+  attributes: Record<string, string | number | boolean | null>;
+  alternatives: string[];
+  took_ms: number;
+  cached: boolean;
+}
+
 export interface Favorite {
   id: number;
   source: Source;

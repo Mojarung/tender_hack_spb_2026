@@ -34,6 +34,7 @@ function SearchInner() {
   const params = useSearchParams();
   const q = (params.get("q") ?? "").trim();
   const from = (params.get("from") ?? "").trim();    // original user query (after a fix)
+  const fromImage = params.get("from_image") === "1";
   const nofix = params.get("nofix") === "1";
   const regionId = Number(params.get("region_id") ?? DEFAULT_REGION_ID);
   const region = getRegion(regionId);
@@ -331,6 +332,14 @@ function SearchInner() {
               >
                 включить
               </Link>
+            </motion.p>
+          )}
+          {fromImage && (
+            <motion.p
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+              className="mt-2 text-xs text-[var(--color-ink-4)]"
+            >
+              запрос распознан по изображению, его можно уточнить в поиске сверху
             </motion.p>
           )}
         </motion.div>

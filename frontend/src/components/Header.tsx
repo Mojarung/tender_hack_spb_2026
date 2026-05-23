@@ -12,6 +12,7 @@ import { useAuth } from "@/lib/auth-hook";
 import { history } from "@/lib/history";
 import { DEFAULT_REGION_ID, RUSSIA_REGIONS, getRegion } from "@/lib/regions";
 import { useHistory } from "@/lib/use-history";
+import { ImageSearchButton } from "./ImageSearchButton";
 import { Logo } from "./Logo";
 
 const REGION_STORAGE_KEY = "pp.region_id";
@@ -77,7 +78,12 @@ function SearchBox() {
           onFocus={() => setOpen(true)}
           onChange={(e) => setQ(e.target.value)}
           placeholder="iphone 15, macbook, кофемашина..."
-          className="input pl-11 pr-4 py-2.5 text-sm rounded-full"
+          className="input pl-11 pr-12 py-2.5 text-sm rounded-full"
+        />
+        <ImageSearchButton
+          regionId={regionId}
+          className="absolute right-2 top-1/2 -translate-y-1/2"
+          buttonClassName="w-8 h-8 rounded-full grid place-items-center text-[var(--color-ink-4)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors"
         />
       </form>
 

@@ -5,6 +5,8 @@ import { ArrowUpRight, Search, Sparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+import { ImageSearchButton } from "./ImageSearchButton";
+
 const SOURCES = ["Wildberries", "Ozon", "Я.Маркет", "Рунет"];
 
 export function Hero() {
@@ -66,8 +68,12 @@ export function Hero() {
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="iPhone 15 128, кофемашина, кроссовки adidas…"
-            className="w-full pl-14 pr-36 py-4 text-base rounded-full bg-white border border-[var(--color-line)] shadow-[0_8px_24px_rgba(11,13,18,0.06)] focus:outline-none focus:border-[var(--color-accent)] focus:shadow-[0_8px_24px_rgba(79,70,229,0.18)] transition-all"
+            className="w-full pl-14 pr-48 py-4 text-base rounded-full bg-white border border-[var(--color-line)] shadow-[0_8px_24px_rgba(11,13,18,0.06)] focus:outline-none focus:border-[var(--color-accent)] focus:shadow-[0_8px_24px_rgba(79,70,229,0.18)] transition-all"
             autoFocus
+          />
+          <ImageSearchButton
+            className="absolute right-[116px] top-1/2 -translate-y-1/2"
+            buttonClassName="w-10 h-10 rounded-full grid place-items-center text-[var(--color-ink-4)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors"
           />
           <button
             type="submit"
