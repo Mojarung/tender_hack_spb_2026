@@ -4,6 +4,9 @@ Heavy scrapes (browser-based) go through arq so the API stays responsive and
 we can horizontally scale workers (`docker compose up --scale worker=4`).
 """
 
+from collections.abc import Callable
+from typing import ClassVar
+
 from arq.connections import RedisSettings
 
 from pricepulse.config import get_settings
@@ -18,5 +21,7 @@ async def scrape_source(ctx: dict, source: str, query: str, max_per_source: int)
 
 class WorkerSettings:
     settings = get_settings()
-    functions = [scrape_source]
+    # arq inspects these as class attributes — ClassVar makes ruff RUF012 happy
+    # without changing arq's discovery semantics.
+    functions: ClassVar[list[Callable[..., object]]] = [scrape_source]
     redis_settings = RedisSettings.from_dsn(settings.redis_url)

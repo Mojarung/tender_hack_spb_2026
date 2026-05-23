@@ -179,7 +179,11 @@ class SearchOrchestrator:
     ) -> ScrapeResult:
         cache_key = f"cache:{adapter.source.value}:{region_id}:{normalized.normalized}:{limit}"
         if self._cache is not None:
-            cached = await self._cache.get(cache_key)
+            try:
+                cached = await self._cache.get(cache_key)
+            except Exception as exc:  # cache failures never break a search
+                log.debug("orchestrator.cache_get_failed", error=str(exc))
+                cached = None
             if cached:
                 offers = [
                     ProductOffer.model_validate(o).model_copy(update={"cached": True})
@@ -241,14 +245,18 @@ class SearchOrchestrator:
                 source=adapter.source.value, layer=int(layer), error=result.error,
             )
 
-        # Populate cache on success
+        # Populate cache on success — wrapped because Redis being down
+        # is never a fatal condition for a successful search.
         if self._cache is not None and result.offers and not result.error:
             ttl = _CACHE_TTL.get(adapter.source, 3600)
-            await self._cache.set(
-                cache_key,
-                {"offers": [o.model_dump(mode="json") for o in result.offers]},
-                ttl_seconds=ttl,
-            )
+            try:
+                await self._cache.set(
+                    cache_key,
+                    {"offers": [o.model_dump(mode="json") for o in result.offers]},
+                    ttl_seconds=ttl,
+                )
+            except Exception as exc:
+                log.debug("orchestrator.cache_set_failed", error=str(exc))
         return result
 
 

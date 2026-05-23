@@ -13,7 +13,7 @@ agents (Claude Code, Cursor, ...) can call it via MCP.
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
@@ -25,6 +25,8 @@ from pricepulse.analytics.sentiment import (
     aggregate,
     classify_batch,
     empty_breakdown,
+)
+from pricepulse.analytics.sentiment import (
     is_available as sentiment_available,
 )
 from pricepulse.config import get_settings
@@ -232,9 +234,9 @@ def _summarise_deal(d: RankedOffer) -> dict:
 
 
 __all__ = [
-    "search_products",
-    "get_top_deals",
+    "compare_offers",
     "get_price_history",
     "get_reviews_sample",
-    "compare_offers",
+    "get_top_deals",
+    "search_products",
 ]

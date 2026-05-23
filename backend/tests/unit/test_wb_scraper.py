@@ -7,7 +7,7 @@ import pytest
 import respx
 
 from pricepulse.domain.models import NormalizedQuery
-from pricepulse.scrapers.wb import WildberriesScraper, _SEARCH_URL
+from pricepulse.scrapers.wb import _SEARCH_URL, WildberriesScraper
 
 
 def _mock_response_body() -> dict:
@@ -50,7 +50,7 @@ async def test_wb_parses_two_products_skips_priceless() -> None:
     assert len(result.offers) == 1
     offer = result.offers[0]
     assert offer.source.value == "wb"
-    assert offer.price == 69900          # noqa: PLR2004 — 6990000 kopeyki / 100 = 69 900 rubles
+    assert offer.price == 69900
     assert "iPhone 15" in offer.name
     assert str(offer.url).startswith("https://www.wildberries.ru/catalog/")
     assert offer.image and "wbbasket.ru" in str(offer.image)

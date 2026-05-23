@@ -57,5 +57,5 @@ class ImageCache:
             try:
                 await s3.head_object(Bucket=self._bucket, Key=key)
                 return True
-            except Exception:  # noqa: BLE001
+            except Exception:
                 return False

@@ -21,7 +21,6 @@ import httpx
 import orjson
 from pydantic import BaseModel, Field
 
-
 CaptchaKind = Literal["text", "silhouettes", "click_object", "kaleidoscope"]
 
 _PROMPTS: dict[CaptchaKind, str] = {
@@ -93,4 +92,4 @@ class VLMSolver:
         return VLMResult(text=parsed.get("text"), clicks=parsed.get("clicks"), raw=parsed)
 
 
-__all__ = ["VLMSolver", "VLMResult", "CaptchaKind"]
+__all__ = ["CaptchaKind", "VLMResult", "VLMSolver"]

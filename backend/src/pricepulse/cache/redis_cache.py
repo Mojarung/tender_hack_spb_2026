@@ -43,3 +43,9 @@ class RedisCache:
 
     async def close(self) -> None:
         await self._redis.aclose()
+
+
+# The route-level singleton lives in `pricepulse.api.cache` —
+# `get_search_cache()` there pings Redis at construction and disables
+# itself if the server is unreachable. Routes use that helper rather
+# than instantiating this class directly.

@@ -86,7 +86,7 @@ packages = ["src/pricepulse"]
 package = true
 
 [tool.ruff]
-line-length = 100
+line-length = 120          # bumped from 100 — Russian strings, Pydantic Field defaults, dataclass init lines
 target-version = "py313"
 src = ["src", "tests"]
 
@@ -102,10 +102,19 @@ select = [
     "C4",
     "RUF",
 ]
-ignore = ["S101"]
+ignore = [
+    "S101",   # assert in tests is fine
+    "B008",   # FastAPI / typer use `def f(x = Depends(...))` idiomatically
+    "RUF001", # Russian project — Cyrillic chars that look like Latin are intentional
+    "RUF002", # same, in docstrings
+    "RUF003", # same, in comments
+]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S105", "S106", "S311"]
+"src/pricepulse/config.py" = ["S105"]            # dev-default credentials (overridden by env in prod)
+"src/pricepulse/core/exceptions.py" = ["N818"]   # `RateLimited`, `CaptchaChallenge` — domain names without Error suffix
+"src/pricepulse/antibot/fingerprints.py" = ["S311"]  # non-cryptographic UA / viewport choice
 
 [tool.mypy]
 python_version = "3.13"

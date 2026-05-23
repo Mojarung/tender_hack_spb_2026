@@ -93,4 +93,4 @@ def translate(text: str) -> str:
     return " ".join(out)
 
 
-__all__ = ["TRANSLIT", "PHRASES", "ALL_TERMS", "translate"]
+__all__ = ["ALL_TERMS", "PHRASES", "TRANSLIT", "translate"]

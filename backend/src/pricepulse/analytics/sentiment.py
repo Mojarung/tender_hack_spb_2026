@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from typing import Literal, TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import structlog
 
@@ -36,8 +36,8 @@ def is_available() -> bool:
     if _pipeline_ready is not None:
         return _pipeline_ready
     try:
-        import torch        # noqa: F401
-        import transformers # noqa: F401
+        import torch  # noqa: F401
+        import transformers  # noqa: F401
         _pipeline_ready = True
     except ImportError:
         _pipeline_ready = False
@@ -48,7 +48,7 @@ def _get_pipeline():
     global _pipeline
     if _pipeline is not None:
         return _pipeline
-    from transformers import pipeline   # local import — heavy
+    from transformers import pipeline  # local import — heavy
     _pipeline = pipeline(
         "sentiment-analysis",
         model=_MODEL,
@@ -113,7 +113,7 @@ def aggregate(results: list[SentimentResult]) -> SentimentBreakdown:
 async def classify_batch(
     texts: list[str],
     *,
-    redis: "Redis | None" = None,
+    redis: Redis | None = None,
     cache_ttl_s: int = 24 * 3600,
 ) -> list[SentimentResult]:
     """Classify each text in `texts`. Skips empty strings (returns neutral)."""
@@ -131,7 +131,7 @@ async def classify_batch(
         keys = [f"sentiment:rubert-tiny2:{_text_hash(t)}" for t in texts]
         try:
             cached = await redis.mget(keys)
-        except Exception:  # noqa: BLE001
+        except Exception:
             cached = [None] * len(texts)
         for i, hit in enumerate(cached):
             if hit:
@@ -159,15 +159,15 @@ async def classify_batch(
         if redis is not None:
             try:
                 pipe = redis.pipeline()
-                for (idx, text), res in zip(misses, [results[i] for i, _ in misses], strict=True):
+                for (_idx, text), res in zip(misses, [results[i] for i, _ in misses], strict=True):
                     pipe.set(
                         f"sentiment:rubert-tiny2:{_text_hash(text)}",
                         f"{res.label}|{res.score:.4f}",  # type: ignore[union-attr]
                         ex=cache_ttl_s,
                     )
                 await pipe.execute()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # cache write is best-effort
+                log.debug("sentiment.cache_writeback_failed", error=str(exc))
 
     return [r if r is not None else SentimentResult("neutral", 0.0) for r in results]
 
@@ -178,12 +178,12 @@ async def classify(text: str) -> SentimentResult:
 
 
 __all__ = [
+    "SentimentBreakdown",
     "SentimentLabel",
     "SentimentResult",
-    "SentimentBreakdown",
+    "aggregate",
     "classify",
     "classify_batch",
-    "aggregate",
     "empty_breakdown",
     "is_available",
 ]
