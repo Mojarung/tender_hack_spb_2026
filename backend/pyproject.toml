@@ -18,7 +18,6 @@ dependencies = [
     # ===== HTTP (cascading L1 of anti-bot stack) =====
     "httpx[http2]>=0.28",
     "curl-cffi>=0.7",           # TLS impersonation (chrome131), HTTP/2+3
-    "tenacity>=9.0",
     # 4-th source — self-hosted SearXNG + own JSON-LD parser, no third-party API.
     # See scrapers/runet.py. (Firecrawl removed: methodology p.5 bans external APIs.)
     # ===== Storage =====
@@ -48,19 +47,6 @@ dependencies = [
     # not a concern for the hackathon project. Used by antibot/browser_pool.py
     # to warm Ozon's anti-bot cookies (see antibot/browser_fetch.py).
     "nodriver>=0.50",
-]
-
-[project.optional-dependencies]
-# Russian sentiment — adds ~1.5 GB of torch wheels, install on demand.
-nlp = [
-    "symspellpy>=6.7",
-    "transformers>=4.46",
-    "torch>=2.5",
-]
-# Local slider-CAPTCHA solver (OpenCV template matching, on-prem). No external
-# captcha-service deps — methodology p.5 bans third-party APIs.
-captcha = [
-    "opencv-python-headless>=4.10",
 ]
 
 [dependency-groups]

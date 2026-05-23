@@ -7,7 +7,8 @@ runs on our own infrastructure:
 
   L1: ``curl_cffi`` HTTP impersonation. Free, ~milliseconds per request.
   L2: ``nodriver`` stealth browser. Free; CPU + RAM.
-  L3: local CAPTCHA solving — OpenCV slider solver + Gemma 4 VLM. Free.
+  L3: reserved for local CAPTCHA solving. Currently unimplemented — escalation
+      to L3 means «out of options»; the source returns empty for that request.
 
 Each layer has a circuit-breaker: the router escalates the next request
 for an affected source after `fail_threshold` failures within
@@ -26,7 +27,7 @@ from pricepulse.domain.enums import SourceKind
 class Layer(IntEnum):
     L1_HTTP_IMPERSONATE = 1
     L2_STEALTH_BROWSER = 2
-    L3_CAPTCHA_LOCAL = 3   # OpenCV slider + Gemma 4 VLM
+    L3_CAPTCHA_LOCAL = 3   # reserved — no implementation, see module docstring
 
 
 @dataclass(slots=True)

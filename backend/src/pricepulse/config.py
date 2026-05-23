@@ -98,14 +98,6 @@ class Settings(BaseSettings):
     ollama_url: str = "http://ollama:11434"
     ollama_vision_model: str = "gemma4:e4b"
 
-    # Notifications
-    ntfy_url: str = "http://ntfy/pricepulse-alerts"
-    apprise_url: str = "http://apprise:8000/notify/pricepulse"
-
-    # Admin services
-    pgadmin_password: str = "hackathon"
-    glitchtip_secret_key: str = ""
-
     # Demo mode — pre-warm Redis cache for jury-known queries so the live
     # demo answers in <100 ms. Paid feature flags / cost-guard are gone —
     # nothing in the project hits a paid third-party service any more.

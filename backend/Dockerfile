@@ -23,8 +23,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 FROM python:3.13-slim-bookworm AS runtime
 
-# Patchright / Camoufox need glibc + a few X libs even in headless mode
+# Chromium runtime libs — nodriver drives an external Chrome/Chromium binary,
+# which still needs the usual glibc + X stack even when running headless.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    chromium \
     libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 \
     libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 \
     libcairo2 libasound2 fonts-liberation curl ca-certificates \
@@ -35,10 +37,6 @@ COPY --from=builder /app /app
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONPATH="/app/src" \
     PYTHONUNBUFFERED=1
-
-# Browser binaries (Patchright pulls Chromium; Camoufox pulls Firefox)
-RUN patchright install chromium && \
-    camoufox fetch || true
 
 EXPOSE 8000
 

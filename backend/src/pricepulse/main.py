@@ -9,7 +9,6 @@ from pricepulse.antibot.browser_pool import close_browser_pool
 from pricepulse.antibot.wb_browser import close_wb_browser
 from pricepulse.api.cache import close_rate_limiter, close_search_cache
 from pricepulse.api.routes import (
-    admin,
     chat,
     favorites,
     health,
@@ -114,7 +113,6 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(health.router)
-    app.include_router(admin.router)
     _include_auth_routers(app)
     app.include_router(search.router, prefix="/api/v1")
     app.include_router(stream.router, prefix="/api/v1")
