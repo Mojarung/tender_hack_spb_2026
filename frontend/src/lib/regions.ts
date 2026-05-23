@@ -5,14 +5,17 @@ export type Region = {
 
 export const DEFAULT_REGION_ID = 213;
 
-// Yandex `lr` ids. For subjects we use the administrative center / primary
-// Yandex Market geo point, because prices are resolved by Yandex geo ids.
+// Yandex `lr` ids. For federal subjects we use the canonical "republic /
+// oblast / krai" geo id (not the administrative-center city), so that
+// Yandex Market resolves regional pricing for the whole subject. Verified
+// against the public Yandex `lr` registry; previously several entries
+// shared an id and silently aliased to one another.
 export const RUSSIA_REGIONS: Region[] = [
   { id: 213, name: "Москва" },
   { id: 2, name: "Санкт-Петербург" },
-  { id: 172, name: "Республика Адыгея" },
+  { id: 11004, name: "Республика Адыгея" },
   { id: 10231, name: "Республика Алтай" },
-  { id: 172, name: "Республика Башкортостан" },
+  { id: 11111, name: "Республика Башкортостан" },
   { id: 198, name: "Республика Бурятия" },
   { id: 28, name: "Республика Дагестан" },
   { id: 1092, name: "Республика Ингушетия" },
@@ -21,10 +24,10 @@ export const RUSSIA_REGIONS: Region[] = [
   { id: 1104, name: "Карачаево-Черкесская Республика" },
   { id: 18, name: "Республика Карелия" },
   { id: 19, name: "Республика Коми" },
-  { id: 33, name: "Республика Марий Эл" },
+  { id: 11077, name: "Республика Марий Эл" },
   { id: 42, name: "Республика Мордовия" },
   { id: 74, name: "Республика Саха (Якутия)" },
-  { id: 33, name: "Республика Северная Осетия — Алания" },
+  { id: 11021, name: "Республика Северная Осетия — Алания" },
   { id: 43, name: "Республика Татарстан" },
   { id: 10303, name: "Республика Тыва" },
   { id: 44, name: "Удмуртская Республика" },
@@ -35,16 +38,16 @@ export const RUSSIA_REGIONS: Region[] = [
   { id: 35, name: "Краснодарский край" },
   { id: 75, name: "Красноярский край" },
   { id: 1090, name: "Пермский край" },
-  { id: 38, name: "Приморский край" },
+  { id: 11409, name: "Приморский край" },
   { id: 36, name: "Ставропольский край" },
   { id: 76, name: "Хабаровский край" },
-  { id: 37, name: "Амурская область" },
+  { id: 11375, name: "Амурская область" },
   { id: 20, name: "Архангельская область" },
-  { id: 37, name: "Астраханская область" },
+  { id: 10946, name: "Астраханская область" },
   { id: 4, name: "Белгородская область" },
   { id: 191, name: "Брянская область" },
   { id: 192, name: "Владимирская область" },
-  { id: 38, name: "Волгоградская область" },
+  { id: 10950, name: "Волгоградская область" },
   { id: 21, name: "Вологодская область" },
   { id: 193, name: "Воронежская область" },
   { id: 5, name: "Ивановская область" },
@@ -57,11 +60,11 @@ export const RUSSIA_REGIONS: Region[] = [
   { id: 7, name: "Костромская область" },
   { id: 53, name: "Курганская область" },
   { id: 8, name: "Курская область" },
-  { id: 9, name: "Ленинградская область" },
-  { id: 9, name: "Липецкая область" },
+  { id: 10174, name: "Ленинградская область" },
+  { id: 10712, name: "Липецкая область" },
   { id: 79, name: "Магаданская область" },
-  { id: 23, name: "Московская область" },
-  { id: 23, name: "Мурманская область" },
+  { id: 1, name: "Московская область" },
+  { id: 10897, name: "Мурманская область" },
   { id: 47, name: "Нижегородская область" },
   { id: 24, name: "Новгородская область" },
   { id: 65, name: "Новосибирская область" },

@@ -61,8 +61,9 @@ def _jsonify(value: Any) -> Any:
 
 
 async def search_products(query: str, max_per_source: int = 5) -> dict:
-    """Search for a product across Wildberries, Ozon, Yandex Market and a
-    floating 4th source (Runet/Megamarket). Returns groups + top deals.
+    """Search for a product across Wildberries, Ozon, Yandex Market and the
+    non-formalised Runet 4th source (self-hosted SearXNG + JSON-LD).
+    Returns groups + top deals.
 
     Args:
         query: free-form product query in Russian or English

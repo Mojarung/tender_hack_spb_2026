@@ -15,6 +15,7 @@ container does no outbound calls.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -33,7 +34,8 @@ _TRAILING_PUNCT = re.compile(r"[.!?…]+\s*$")
 logger = logging.getLogger("spellcheck-svc")
 logging.basicConfig(level=logging.INFO)
 
-_MODEL_ID = "ai-forever/sage-fredt5-distilled-95m"
+# Override via SPELLCHECK_MODEL env if a different model is baked into the image.
+_MODEL_ID = os.getenv("SPELLCHECK_MODEL", "ai-forever/sage-fredt5-distilled-95m")
 _device: str = "cuda" if torch.cuda.is_available() else "cpu"
 _tokenizer: Any = None
 _model: Any = None

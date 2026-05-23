@@ -85,18 +85,10 @@ services:
       "
     networks: [pricepulse]
 
-  # ===== 4th source: self-hosted Firecrawl + SearXNG =====
-  firecrawl-api:
-    image: firecrawl/firecrawl:latest
-    env_file: .env
-    environment:
-      USE_DB_AUTHENTICATION: "false"
-      REDIS_URL: redis://redis:6379
-      SEARXNG_ENDPOINT: http://searxng:8080
-    depends_on: [redis, searxng]
-    ports:
-      - "3002:3002"
-    networks: [pricepulse]
+  # ===== 4th source: self-hosted SearXNG =====
+  # Firecrawl (self-hosted) was removed — methodology p.5 bans external
+  # APIs, and our runet scraper now parses JSON-LD directly from the URLs
+  # SearXNG returns. See backend/src/pricepulse/scrapers/runet.py.
 
   searxng:
     image: searxng/searxng:latest

@@ -1,3 +1,4 @@
+import { DEFAULT_REGION_ID } from "./regions";
 import type {
   ChatResponse, Favorite, SearchResponse, User,
 } from "./types";
@@ -61,7 +62,7 @@ export const api = {
         query,
         max_per_source,
         nofix: opts?.nofix ?? false,
-        region_id: opts?.region_id ?? 213,
+        region_id: opts?.region_id ?? DEFAULT_REGION_ID,
       }),
     }),
 

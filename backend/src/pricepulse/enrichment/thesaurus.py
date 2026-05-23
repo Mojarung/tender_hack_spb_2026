@@ -1,7 +1,7 @@
 """RU brand thesaurus for `normalize_query`.
 
-Strategy: the marketplaces we hit (WB / Ozon / Я.Маркет / Megamarket)
-are Russian and index Russian descriptions as primary. So we DO NOT
+Strategy: the marketplaces we hit (WB / Ozon / Я.Маркет / Runet) are
+Russian and index Russian descriptions as primary. So we DO NOT
 translate generic nouns like "наушники", "пылесос", "кроссовки" — they
 already work and translating them hurts recall.
 

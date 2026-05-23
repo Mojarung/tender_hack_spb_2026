@@ -83,6 +83,38 @@ ollama pull gemma4:e4b
 
 ## CHANGELOG
 
+### 2026-05-23 (ночь) — P0/P1 audit cleanups
+
+- **Yandex `lr`-коды регионов**: на фронте было 6 пар дубликатов (`Башкортостан`/`Адыгея`,
+  `Северная Осетия`/`Марий Эл`, `Амурская`/`Астраханская`, `Волгоградская`/`Приморский`,
+  `Ленинградская`/`Липецкая`, `Московская`/`Мурманская`). Сверил с реальным Yandex
+  `lr`-реестром, заменил на канонические коды (11111 / 11004 / 11021 / 11077 / 11375 /
+  10946 / 10950 / 11409 / 10174 / 10712 / 10897 / 1).
+- **`RateLimiter` теперь Redis-backed в проде** — `api/cache.py::get_rate_limiter()`
+  singleton, инжектится в `SearchOrchestrator` из обоих route'ов. Раньше дефолтил к
+  process-local bucket, и комментарий «the API layer injects a Redis-backed one» был
+  желаемым, не фактическим. Теперь N воркеров делят один бюджет.
+- **`api/cache.py`**: `asyncio.Lock` вокруг singleton init — race на первом запросе
+  больше не создаст две Redis-инстанции.
+- **Firecrawl-py выпилен** из `pyproject.toml` + перерезолвлен `uv.lock`
+  (минус `firecrawl-py 4.27.1` + `nest-asyncio`). Сервис `firecrawl-api` удалён из
+  `docker-compose.yml`. Методичка p.5 запрещает любые внешние API.
+- **`backend/spellcheck/Dockerfile` на uv** — `ghcr.io/astral-sh/uv:python3.11-bookworm-slim`
+  + `uv pip install --system`. Версии transformers/torch/fastapi/pydantic пиннутся
+  диапазонами (`>=4.46,<5.0` стиль), чтобы major-апдейт не сломал билд.
+- **URL-ы в env**: `ADMIN_HOST` для админ-ссылок (`admin.py` теперь строит ссылки
+  из settings, не из хардкода), `SPELLCHECK_MODEL` для модели SAGE,
+  `vlm_solver.VLMSolver` берёт `ollama_url`/`ollama_vision_model` из settings по
+  умолчанию. Никаких новых захардкоженных хостов в коде.
+- **SSE поддерживает `nofix`** — `GET /search/stream?nofix=1` и `orchestrator.stream(nofix=...)`.
+- **`DEFAULT_REGION_ID`** теперь единственный источник на фронте — `api.ts` импортирует
+  его из `regions.ts`.
+- **Стale-strings**: `agent/tools.py`, `enrichment/thesaurus.py`, `orchestrator/search.py`
+  больше не упоминают Megamarket; `routes/admin.py` больше не ссылается на Firecrawl.
+- **CLAUDE.md** переписан — убраны упоминания удалённых модулей, добавлены: spellcheck-сервис,
+  region partial-coverage, uv-everywhere конвенция.
+- Всё на 62 passed, ruff clean.
+
 ### 2026-05-23 (вечер) — апгрейд spell-correction
 
 - **JamSpell → SAGE FRED-T5 distilled-95M.** N-gram small-модель JamSpell

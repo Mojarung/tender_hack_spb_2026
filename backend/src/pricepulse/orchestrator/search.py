@@ -111,10 +111,12 @@ class SearchOrchestrator:
         max_per_source: int,
         sources: list[SourceKind] | None = None,
         region_id: int = 213,
+        *,
+        nofix: bool = False,
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
         """Yields SSE-shaped events as adapters report offers."""
         started = time.perf_counter()
-        normalized = await normalize_query(query, cache=self._cache)
+        normalized = await normalize_query(query, fix=not nofix, cache=self._cache)
         yield "query_normalized", normalized.model_dump()
 
         adapters = self._pick(sources)
@@ -288,7 +290,7 @@ def _rank_top_deals(groups: list[SourceGroup], top_k: int = 10) -> list[RankedOf
     """Best-Deal Score across ALL sources, returns top-K as RankedOffer.
 
     Price population = every offer in the result set, so price_z is computed
-    cross-source — that lets a cheap Megamarket offer outrank a more famous WB
+    cross-source — that lets a cheap Runet offer outrank a more famous WB
     one on identical specs.
     """
     all_offers: list[ProductOffer] = []

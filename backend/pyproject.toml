@@ -19,8 +19,8 @@ dependencies = [
     "httpx[http2]>=0.28",
     "curl-cffi>=0.7",           # TLS impersonation (chrome131), HTTP/2+3
     "tenacity>=9.0",
-    # ===== 4-th source =====
-    "firecrawl-py>=2.0",
+    # 4-th source — self-hosted SearXNG + own JSON-LD parser, no third-party API.
+    # See scrapers/runet.py. (Firecrawl removed: methodology p.5 bans external APIs.)
     # ===== Storage =====
     "redis>=5.2",
     "arq>=0.26",

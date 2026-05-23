@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     api_port: int = 8000
     api_cors_origins: str = "http://localhost:3000"
 
+    # Base host the browser uses to reach our admin landing page links.
+    # Override per-environment (e.g. https://admin.pricepulse.team in prod).
+    admin_host: str = "http://localhost"
+
     postgres_host: str = "postgres"
     postgres_port: int = 5432
     postgres_user: str = "pricepulse"

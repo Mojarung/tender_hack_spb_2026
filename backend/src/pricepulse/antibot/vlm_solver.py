@@ -66,12 +66,18 @@ class VLMSolver:
 
     def __init__(
         self,
-        base_url: str = "http://ollama:11434",
-        model: str = "gemma4:e4b",
+        base_url: str | None = None,
+        model: str | None = None,
         timeout_s: float = 30.0,
     ) -> None:
-        self._client = httpx.AsyncClient(base_url=base_url, timeout=timeout_s)
-        self._model = model
+        from pricepulse.config import get_settings
+
+        settings = get_settings()
+        self._client = httpx.AsyncClient(
+            base_url=base_url or settings.ollama_url,
+            timeout=timeout_s,
+        )
+        self._model = model or settings.ollama_vision_model
 
     async def aclose(self) -> None:
         await self._client.aclose()
