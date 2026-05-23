@@ -102,8 +102,8 @@ export function ProductCard({ offer, index = 0, highlight }: Props) {
           </button>
         </div>
 
-        {/* Image */}
-        <div className="h-32 grid place-items-center bg-[var(--color-surface-2)] rounded-lg overflow-hidden">
+        {/* Image — 3:4 portrait plate, WB-style */}
+        <div className="aspect-[3/4] w-full grid place-items-center bg-[var(--color-surface-2)] rounded-lg overflow-hidden">
           {offer.image && !imgFailed ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
@@ -111,7 +111,7 @@ export function ProductCard({ offer, index = 0, highlight }: Props) {
               alt={offer.name}
               loading="lazy"
               onError={() => setImgFailed(true)}
-              className="h-full max-w-full object-contain transition-transform duration-300 group-hover:scale-105"
+              className="w-full h-full object-contain transition-transform duration-300 group-hover:scale-105"
             />
           ) : (
             <div className="text-[var(--color-ink-4)] text-3xl font-semibold tracking-tight">

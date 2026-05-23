@@ -291,7 +291,7 @@ function SearchInner() {
           <EmptyState query={q} />
         ) : (
           <>
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 mt-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mt-6">
               {offers.map((o, i) => (
                 <ProductCard key={`${o.source}-${o.url}-${i}`} offer={o} index={i} />
               ))}
@@ -343,15 +343,6 @@ function EmptyState({ query }: { query: string }) {
         Источники могли временно ограничить запрос или мы не угадали
         формулировку. Попробуйте короче или с другими словами.
       </p>
-
-      <div className="mt-6 flex flex-wrap items-center justify-center gap-2 text-xs">
-        <span className="text-[var(--color-ink-4)]">похожее:</span>
-        {["iphone 15", "macbook air m3", "робот пылесос", "sony wh-1000xm5"].map((s) => (
-          <Link key={s} href={`/search?q=${encodeURIComponent(s)}`} className="chip">
-            {s}
-          </Link>
-        ))}
-      </div>
     </motion.div>
   );
 }

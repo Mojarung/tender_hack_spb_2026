@@ -79,24 +79,6 @@ export function Hero() {
         </div>
       </motion.form>
 
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 0.45, duration: 0.6 }}
-        className="mt-6 flex items-center justify-center gap-3 flex-wrap text-xs text-[var(--color-ink-4)]"
-      >
-        <span>попробуйте:</span>
-        {["iphone 15 128gb", "macbook air m3", "робот пылесос", "sony wh-1000xm5"].map((s) => (
-          <button
-            key={s}
-            type="button"
-            onClick={() => router.push(`/search?q=${encodeURIComponent(s)}`)}
-            className="chip hover:bg-white"
-          >
-            {s}
-          </button>
-        ))}
-      </motion.div>
     </section>
   );
 }
