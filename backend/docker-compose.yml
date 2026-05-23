@@ -175,23 +175,7 @@ services:
     networks: [pricepulse]
 
   # ===== Local LLM (Gemma 4) for CAPTCHA + 4th-source extraction =====
-  # `ollama pull gemma4:e4b` after first start (or bind a host volume that
-  # already has the model). Vision-capable, ~5GB Q4, ~30 tok/s on CPU.
-  ollama:
-    image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollamadata:/root/.ollama
-    # Uncomment to expose host GPU (NVIDIA Container Toolkit required)
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
-    networks: [pricepulse]
+  # del ollama
 
   # ===== Notifications =====
   ntfy:

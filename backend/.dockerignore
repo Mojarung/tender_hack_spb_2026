@@ -8,5 +8,4 @@ __pycache__
 .coverage
 htmlcov
 tests
-*.md
 .env

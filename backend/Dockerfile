@@ -10,6 +10,7 @@ WORKDIR /app
 
 # Install deps first (cache-friendly)
 COPY pyproject.toml uv.lock* ./
+COPY README.md ./README.md
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-dev || \
     uv sync --no-install-project --no-dev
