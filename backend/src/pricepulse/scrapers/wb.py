@@ -8,6 +8,8 @@ back off on 429. See backend/docs/anti-bot.md §5.1.
 from __future__ import annotations
 
 import asyncio
+import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -23,7 +25,8 @@ from tenacity import (
 
 from pricepulse.analytics.price_history import PriceHistoryStore
 from pricepulse.domain.enums import SourceKind
-from pricepulse.domain.models import NormalizedQuery, ProductOffer
+from pricepulse.domain.models import DeliveryInfo, NormalizedQuery, ProductAttributes, ProductOffer
+from pricepulse.enrichment.attributes import extract_attributes
 from pricepulse.observability.metrics import (
     scrape_duration_seconds,
     scrape_offers_returned_total,
@@ -35,7 +38,22 @@ from pricepulse.scrapers.wb_basket import image_url as wb_image_url
 log = structlog.get_logger(__name__)
 
 _SEARCH_URL = "https://search.wb.ru/exactmatch/ru/common/v18/search"
+_GEO_URL = "https://user-geo-data.wildberries.ru/get-geo-info"
 _DEFAULT_DEST = "-1257786"          # Moscow region, universal in 2026
+
+_CITY_COORDS: dict[str, tuple[float, float, str]] = {
+    "москва": (55.7558, 37.6176, "Москва"),
+    "moscow": (55.7558, 37.6176, "Москва"),
+    "санкт-петербург": (59.9386, 30.3141, "Санкт-Петербург"),
+    "спб": (59.9386, 30.3141, "Санкт-Петербург"),
+    "saint petersburg": (59.9386, 30.3141, "Санкт-Петербург"),
+    "новосибирск": (55.0084, 82.9357, "Новосибирск"),
+    "novosibirsk": (55.0084, 82.9357, "Новосибирск"),
+}
+
+_WB_SUBJECT_CATEGORY: dict[int, str] = {
+    515: "smartphone",
+}
 
 _HEADERS = {
     "User-Agent": (
@@ -50,6 +68,13 @@ _HEADERS = {
     "Sec-Fetch-Mode": "cors",
     "Sec-Fetch-Site": "cross-site",
 }
+
+
+@dataclass(frozen=True, slots=True)
+class _DestInfo:
+    dest: str
+    city: str | None = None
+    source: str = "default"
 
 
 def _params(query: str, page: int, dest: str) -> dict[str, str]:
@@ -80,7 +105,104 @@ def _price_from_sizes(sizes: list[dict[str, Any]]) -> Decimal | None:
     return Decimal(int(total)) / Decimal(100)   # kopeyki → rubles
 
 
-def _to_offer(raw: dict[str, Any]) -> ProductOffer | None:
+def _city_key(city: str) -> str:
+    return re.sub(r"\s+", " ", city.strip().lower().replace("\u0451", "\u0435"))
+
+
+def _dest_from_xinfo(value: str) -> str | None:
+    match = re.search(r"(?:^|&)dest=([^&]+)", value)
+    return match.group(1) if match else None
+
+
+async def _resolve_dest(city: str | None, timeout_s: float) -> _DestInfo:
+    if not city:
+        return _DestInfo(dest=_DEFAULT_DEST)
+    coords = _CITY_COORDS.get(_city_key(city))
+    if coords is None:
+        return _DestInfo(dest=_DEFAULT_DEST, city=city, source="default_unknown_city")
+    lat, lon, canonical_city = coords
+    try:
+        async with httpx.AsyncClient(headers=_HEADERS, timeout=timeout_s) as client:
+            resp = await client.get(
+                _GEO_URL,
+                params={"latitude": lat, "longitude": lon, "address": canonical_city},
+            )
+            resp.raise_for_status()
+            body = resp.json()
+    except httpx.HTTPError as exc:
+        log.warning("wb.geo_failed", city=city, error=str(exc))
+        return _DestInfo(dest=_DEFAULT_DEST, city=canonical_city, source="default_geo_failed")
+    dest = _dest_from_xinfo(str(body.get("xinfo") or ""))
+    return _DestInfo(
+        dest=dest or _DEFAULT_DEST,
+        city=str(body.get("address") or canonical_city),
+        source="wb_geo" if dest else "default_geo_no_dest",
+    )
+
+
+def _first_size(raw: dict[str, Any]) -> dict[str, Any]:
+    sizes = raw.get("sizes") or []
+    return sizes[0] if sizes and isinstance(sizes[0], dict) else {}
+
+
+def _first_stock(size: dict[str, Any]) -> dict[str, Any]:
+    stocks = size.get("stocks") or []
+    return stocks[0] if stocks and isinstance(stocks[0], dict) else {}
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _attrs(raw: dict[str, Any], name: str, characteristics: dict[str, str]) -> ProductAttributes:
+    attrs = extract_attributes(name, characteristics)
+    subject_id = _int_or_none(raw.get("subjectId"))
+    colors = raw.get("colors") or []
+    color_names = [c.get("name") for c in colors if isinstance(c, dict) and c.get("name")]
+    category = _WB_SUBJECT_CATEGORY.get(subject_id or 0) or attrs.category
+    extra = {**attrs.extra}
+    if subject_id is not None:
+        extra["wb_subject_id"] = subject_id
+    subject_parent = _int_or_none(raw.get("subjectParentId"))
+    if subject_parent is not None:
+        extra["wb_subject_parent_id"] = subject_parent
+    return attrs.model_copy(update={
+        "category": category,
+        "brand": str(raw.get("brand") or attrs.brand or "").lower() or None,
+        "color": attrs.color,
+        "extra": extra,
+        "raw": {**attrs.raw, "wb_colors": ", ".join(color_names)},
+        "confidence": max(attrs.confidence, 0.7 if category or color_names else attrs.confidence),
+    })
+
+
+def _delivery(raw: dict[str, Any], dest: _DestInfo) -> DeliveryInfo | None:
+    size = _first_size(raw)
+    stock = _first_stock(size)
+    wh = stock.get("wh") or size.get("wh") or raw.get("wh")
+    dist = stock.get("dist") or size.get("dist") or raw.get("dist")
+    eta_min = stock.get("time1") or size.get("time1") or raw.get("time1")
+    eta_max = stock.get("time2") or size.get("time2") or raw.get("time2")
+    qty = stock.get("qty") or raw.get("totalQuantity")
+    if not any(v is not None for v in (wh, dist, eta_min, eta_max, qty)):
+        return None
+    return DeliveryInfo(
+        city=dest.city,
+        region_id=dest.dest,
+        region_source=dest.source,
+        warehouse_id=str(wh) if wh is not None else None,
+        distance_marketplace=_int_or_none(dist),
+        eta_min_hours=_int_or_none(eta_min),
+        eta_max_hours=_int_or_none(eta_max),
+        stock=_int_or_none(qty),
+        confidence=0.9 if dest.source == "wb_geo" else 0.65,
+    )
+
+
+def _to_offer(raw: dict[str, Any], dest: _DestInfo | None = None) -> ProductOffer | None:
     nm_id = raw.get("id")
     name = raw.get("name") or ""
     if not nm_id or not name:
@@ -92,6 +214,28 @@ def _to_offer(raw: dict[str, Any]) -> ProductOffer | None:
     image = wb_image_url(int(nm_id))
     feedbacks = int(raw.get("feedbacks") or raw.get("nmFeedbacks") or 0)
     rating = float(raw.get("nmReviewRating") or raw.get("reviewRating") or raw.get("rating") or 0)
+    size = _first_size(raw)
+    stock = _first_stock(size)
+    colors = raw.get("colors") or []
+    color_names = [c.get("name") for c in colors if isinstance(c, dict) and c.get("name")]
+    characteristics = {
+        "brand": raw.get("brand", ""),
+        "supplier": raw.get("supplier", ""),
+        "rating": f"{rating:.1f}",
+        "feedbacks": str(feedbacks),
+        "supplier_rating": str(raw.get("supplierRating") or ""),
+        "colors": ", ".join(str(c) for c in color_names),
+        "subject_id": str(raw.get("subjectId") or ""),
+        "subject_parent_id": str(raw.get("subjectParentId") or ""),
+        "weight": str(raw.get("weight") or ""),
+        "volume": str(raw.get("volume") or ""),
+        "stock": str(stock.get("qty") or raw.get("totalQuantity") or ""),
+        "warehouse_id": str(stock.get("wh") or size.get("wh") or raw.get("wh") or ""),
+        "distance_marketplace": str(stock.get("dist") or size.get("dist") or raw.get("dist") or ""),
+        "eta_min_hours": str(stock.get("time1") or size.get("time1") or raw.get("time1") or ""),
+        "eta_max_hours": str(stock.get("time2") or size.get("time2") or raw.get("time2") or ""),
+    }
+    dest_info = dest or _DestInfo(dest=_DEFAULT_DEST)
     return ProductOffer(
         source=SourceKind.WB,
         name=name,
@@ -99,12 +243,9 @@ def _to_offer(raw: dict[str, Any]) -> ProductOffer | None:
         currency="RUB",
         url=url,
         image=image,
-        characteristics={
-            "brand": raw.get("brand", ""),
-            "supplier": raw.get("supplier", ""),
-            "rating": f"{rating:.1f}",
-            "feedbacks": str(feedbacks),
-        },
+        characteristics=characteristics,
+        attributes=_attrs(raw, name, characteristics),
+        delivery=_delivery(raw, dest_info),
         seller=raw.get("supplier"),
         rating=rating if rating else None,
         fetched_at=datetime.now(tz=UTC),
@@ -120,10 +261,12 @@ class WildberriesScraper:
         dest: str = _DEFAULT_DEST,
         timeout_s: float = 10.0,
         price_history: PriceHistoryStore | None = None,
+        city: str | None = None,
     ) -> None:
         self._dest = dest
         self._timeout = timeout_s
         self._price_history = price_history
+        self._city = city
 
     async def search(
         self,
@@ -131,7 +274,8 @@ class WildberriesScraper:
         limit: int,
         on_offer: OnOffer | None = None,
     ) -> ScrapeResult:
-        params = _params(query.normalized or query.raw, page=1, dest=self._dest)
+        dest = await _resolve_dest(self._city, self._timeout)
+        params = _params(query.normalized or query.raw, page=1, dest=dest.dest)
 
         async def _fetch() -> httpx.Response:
             async with httpx.AsyncClient(
@@ -172,7 +316,7 @@ class WildberriesScraper:
             products = body.get("products") or (body.get("data") or {}).get("products") or []
             offers: list[ProductOffer] = []
             for raw in products[:limit]:
-                offer = _to_offer(raw)
+                offer = _to_offer(raw, dest=dest)
                 if offer is None:
                     continue
                 offers.append(offer)
@@ -203,4 +347,8 @@ if __name__ == "__main__":  # pragma: no cover
     import json
 
     result = asyncio.run(wb_search("iphone 15 128", limit=5))
-    print(json.dumps([o.model_dump(mode="json") for o in result.offers], ensure_ascii=False, indent=2))
+    print(json.dumps(
+        [o.model_dump(mode="json") for o in result.offers],
+        ensure_ascii=False,
+        indent=2,
+    ))

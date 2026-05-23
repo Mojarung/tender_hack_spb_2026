@@ -8,7 +8,7 @@ from decimal import Decimal
 import pytest
 
 from pricepulse.domain.enums import SourceKind
-from pricepulse.domain.models import NormalizedQuery, ProductOffer
+from pricepulse.domain.models import NormalizedQuery, ProductAttributes, ProductOffer
 from pricepulse.orchestrator.search import SearchOrchestrator
 from pricepulse.scrapers.base import OnOffer, ScrapeResult
 
@@ -122,6 +122,25 @@ async def test_top_deals_are_ranked_descending_by_score() -> None:
 
 
 @pytest.mark.asyncio
+async def test_top_deals_prefer_matching_attributes_when_price_equal() -> None:
+    adapters = {
+        SourceKind.WB: _Stub(SourceKind.WB, offers=[
+            _offer(SourceKind.WB, "Apple iPhone 15 Pro Black", 50000),
+            _offer(SourceKind.WB, "Apple iPhone 15 Black", 50000),
+        ]),
+        SourceKind.OZON: _Stub(SourceKind.OZON, offers=[]),
+        SourceKind.YA_MARKET: _Stub(SourceKind.YA_MARKET, offers=[]),
+        SourceKind.RUNET: _Stub(SourceKind.RUNET, offers=[]),
+    }
+    orch = SearchOrchestrator(adapters=adapters,
+                              runet_fallback=_Stub(SourceKind.RUNET, offers=[]))
+
+    _, _, top = await orch.run("iphone 15 black", max_per_source=10)
+
+    assert top[0].offer.name == "Apple iPhone 15 Black"
+
+
+@pytest.mark.asyncio
 async def test_run_falls_back_to_megamarket_when_runet_empty() -> None:
     """If RunetScraper returns nothing without an error, we transparently
     try the Megamarket fallback adapter (see anti-bot.md §5.4)."""
@@ -139,3 +158,5 @@ async def test_run_falls_back_to_megamarket_when_runet_empty() -> None:
     runet = next(g for g in groups if g.source == SourceKind.RUNET)
     assert runet.count == 1
     assert runet.offers[0].name == "mm-1"
+
+

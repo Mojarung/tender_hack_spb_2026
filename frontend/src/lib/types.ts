@@ -15,10 +15,42 @@ export interface ProductOffer {
   url: string;
   image: string | null;
   characteristics: Record<string, string>;
+  attributes?: ProductAttributes | null;
+  delivery?: DeliveryInfo | null;
   seller: string | null;
   rating: number | null;
   fetched_at: string;
   cached: boolean;
+}
+
+export interface ProductAttributes {
+  category?: string | null;
+  brand?: string | null;
+  model?: string | null;
+  color?: string | null;
+  storage_gb?: number | null;
+  ram_gb?: number | null;
+  season?: string | null;
+  size?: string | null;
+  paper_format?: string | null;
+  density_gm2?: number | null;
+  sheets_count?: number | null;
+  confidence: number;
+  raw: Record<string, string>;
+  extra: Record<string, string | number | boolean>;
+}
+
+export interface DeliveryInfo {
+  city?: string | null;
+  region_id?: string | null;
+  region_source?: string | null;
+  warehouse_id?: string | null;
+  distance_marketplace?: number | null;
+  eta_min_hours?: number | null;
+  eta_max_hours?: number | null;
+  stock?: number | null;
+  delivery_text?: string | null;
+  confidence: number;
 }
 
 export interface SourceGroup {
@@ -31,8 +63,22 @@ export interface SourceGroup {
   error?: string | null;
 }
 
-export interface NormalizedQuery { raw: string; normalized: string; expansions: string[]; }
-export interface RankedOffer { offer: ProductOffer; score: number; rank: number; }
+export interface NormalizedQuery {
+  raw: string;
+  normalized: string;
+  expansions: string[];
+  attributes?: ProductAttributes | null;
+}
+export interface RankedOffer {
+  offer: ProductOffer;
+  score: number;
+  rank: number;
+  deal_score?: number;
+  relevance_score?: number;
+  match_signals?: string[];
+  mismatch_signals?: string[];
+  unknown_signals?: string[];
+}
 
 export interface SearchResponse {
   query: NormalizedQuery;

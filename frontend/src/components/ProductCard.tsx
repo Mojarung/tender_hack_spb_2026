@@ -2,7 +2,7 @@
 
 import clsx from "clsx";
 import { motion } from "framer-motion";
-import { ArrowUpRight, Heart, Star } from "lucide-react";
+import { ArrowUpRight, Heart, Star, Truck } from "lucide-react";
 import { useState } from "react";
 import toast from "react-hot-toast";
 
@@ -17,6 +17,47 @@ const sourceClass: Record<string, string> = {
   runet: "source-dot-runet",
 };
 
+const colorLabel: Record<string, string> = {
+  black: "черный",
+  white: "белый",
+  blue: "синий",
+  red: "красный",
+  pink: "розовый",
+  green: "зеленый",
+  yellow: "желтый",
+  gray: "серый",
+  silver: "серебристый",
+  gold: "золотой",
+  purple: "фиолетовый",
+  orange: "оранжевый",
+};
+
+function attributeChips(offer: ProductOffer): string[] {
+  const a = offer.attributes;
+  if (!a) return [];
+  return [
+    a.model,
+    a.ram_gb ? `${a.ram_gb} ГБ RAM` : null,
+    a.storage_gb ? `${a.storage_gb} ГБ` : null,
+    a.color ? colorLabel[a.color] ?? a.color : null,
+    a.size,
+    a.season,
+    a.paper_format,
+    a.density_gm2 ? `${a.density_gm2} г/м²` : null,
+    a.sheets_count ? `${a.sheets_count} л.` : null,
+  ].filter((v): v is string => !!v).slice(0, 3);
+}
+
+function deliveryText(offer: ProductOffer): string | null {
+  const d = offer.delivery;
+  if (!d) return null;
+  if (d.delivery_text) return d.delivery_text;
+  if (d.eta_max_hours == null) return null;
+  const city = d.city ? `${d.city}: ` : "";
+  const min = d.eta_min_hours != null ? `${d.eta_min_hours}-` : "до ";
+  return `${city}${min}${d.eta_max_hours} ч`;
+}
+
 interface Props {
   offer: ProductOffer;
   index?: number;
@@ -30,6 +71,8 @@ export function ProductCard({ offer, index = 0, highlight }: Props) {
 
   const rating = offer.rating ?? Number(offer.characteristics?.rating ?? 0);
   const feedbacks = offer.characteristics?.feedbacks;
+  const chips = attributeChips(offer);
+  const delivery = deliveryText(offer);
 
   async function toggleFav(e: React.MouseEvent) {
     e.preventDefault();
@@ -128,6 +171,21 @@ export function ProductCard({ offer, index = 0, highlight }: Props) {
           {feedbacks && <span>· {feedbacks} отзывов</span>}
           {offer.seller && <span className="truncate">· {offer.seller}</span>}
         </div>
+        {chips.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {chips.map((chip) => (
+              <span key={chip} className="chip !px-2 !py-0.5 text-[11px]">
+                {chip}
+              </span>
+            ))}
+          </div>
+        )}
+        {delivery && (
+          <div className="mt-2 inline-flex items-center gap-1 text-[11px] text-[var(--color-ink-4)]">
+            <Truck className="w-3 h-3" />
+            {delivery}
+          </div>
+        )}
       </div>
 
       {/* Price + CTA */}

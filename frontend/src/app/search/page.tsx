@@ -1,10 +1,10 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { CornerDownLeft, SearchX } from "lucide-react";
+import { CornerDownLeft, MapPin, SearchX } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, type FormEvent, useEffect, useRef, useState } from "react";
 
 import { ProductCard } from "@/components/ProductCard";
 import { GridSkeleton } from "@/components/Skeleton";
@@ -19,15 +19,32 @@ function SearchInner() {
   const q = (params.get("q") ?? "").trim();
   const from = (params.get("from") ?? "").trim();    // original user query (after a fix)
   const nofix = params.get("nofix") === "1";
+  const city = (params.get("city") ?? "").trim();
   const [data, setData] = useState<SearchResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<Source | "all">("all");
+  const [cityDraft, setCityDraft] = useState(city);
 
   /** When we replace the URL to the corrected query, the effect re-fires
    *  for the new `q`. The next run reuses the data already in state and
    *  just clears the loading flag — no duplicate request. */
   const skipNextFetch = useRef(false);
+
+  useEffect(() => {
+    setCityDraft(city);
+  }, [city]);
+
+  function applyCity(e: FormEvent) {
+    e.preventDefault();
+    const sp = new URLSearchParams();
+    sp.set("q", q);
+    if (from) sp.set("from", from);
+    if (nofix) sp.set("nofix", "1");
+    const nextCity = cityDraft.trim();
+    if (nextCity) sp.set("city", nextCity);
+    router.replace(`/search?${sp.toString()}`);
+  }
 
   useEffect(() => {
     if (!q) { setLoading(false); return; }
@@ -44,7 +61,7 @@ function SearchInner() {
     // `from` present ⇒ we're already showing the canonical query.
     const useNofix = nofix || !!from;
 
-    api.search(q, 16, { nofix: useNofix })
+    api.search(q, 16, { nofix: useNofix, city: city || undefined })
       .then((r) => {
         if (cancelled) return;
         const fixed = r.query.normalized.trim();
@@ -58,6 +75,7 @@ function SearchInner() {
           const sp = new URLSearchParams();
           sp.set("q", fixed);
           sp.set("from", q);
+          if (city) sp.set("city", city);
           router.replace(`/search?${sp.toString()}`);
           // loading stays true; the next effect run flips it.
         } else {
@@ -73,7 +91,7 @@ function SearchInner() {
       });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, nofix]);
+  }, [q, nofix, city]);
 
   if (!q) {
     return (
@@ -104,16 +122,82 @@ function SearchInner() {
             ))}
           </ul>
 
+          <form onSubmit={applyCity} className="mt-6 pt-4 border-t border-[var(--color-line)]">
+            <label className="text-xs uppercase tracking-wider text-[var(--color-ink-4)] font-medium flex items-center gap-1.5 mb-2">
+              <MapPin className="w-3 h-3" />
+              Город доставки
+            </label>
+            <div className="flex gap-2">
+              <input
+                value={cityDraft}
+                onChange={(e) => setCityDraft(e.target.value)}
+                placeholder="Москва"
+                className="min-w-0 flex-1 rounded-lg border border-[var(--color-line)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
+              />
+              <button type="submit" className="btn btn-primary !px-3 !py-2 text-xs">
+                OK
+              </button>
+            </div>
+            <p className="mt-2 text-[11px] text-[var(--color-ink-4)]">
+              Для WB используем региональный dest и ETA склада.
+            </p>
+          </form>
+
           {data?.top_deals?.length ? (
             <>
               <div className="text-xs uppercase tracking-wider text-[var(--color-ink-4)] font-medium mt-6 mb-3">Лучшие сделки</div>
-              <ol className="space-y-1.5">
-                {data.top_deals.slice(0, 3).map((d) => (
-                  <li key={d.rank} className="flex items-center gap-2 text-sm">
-                    <span className="w-6 h-6 rounded-full bg-[var(--color-accent-50)] text-[var(--color-accent-2)] grid place-items-center text-[11px] font-bold">{d.rank}</span>
-                    <span className="flex-1 truncate text-[var(--color-ink-2)]">{d.offer.name}</span>
-                  </li>
-                ))}
+              <ol className="space-y-3">
+                {data.top_deals.slice(0, 3).map((d) => {
+                  const rel = d.relevance_score ?? null;
+                  const relPct = rel !== null ? Math.round(rel * 100) : null;
+                  return (
+                    <li key={d.rank} className="text-sm">
+                      <div className="flex items-start gap-2">
+                        <span className="w-6 h-6 shrink-0 rounded-full bg-[var(--color-accent-50)] text-[var(--color-accent-2)] grid place-items-center text-[11px] font-bold">{d.rank}</span>
+                        <a
+                          href={d.offer.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex-1 truncate text-[var(--color-ink-2)] hover:text-[var(--color-accent-2)]"
+                          title={d.offer.name}
+                        >
+                          {d.offer.name}
+                        </a>
+                      </div>
+                      <div className="mt-1 ml-8 flex flex-wrap items-center gap-1 text-[10px] leading-tight">
+                        {relPct !== null && (
+                          <span
+                            className={`px-1.5 py-0.5 rounded font-medium ${
+                              relPct >= 85
+                                ? "bg-green-100 text-green-800"
+                                : relPct >= 60
+                                ? "bg-yellow-100 text-yellow-800"
+                                : "bg-red-100 text-red-800"
+                            }`}
+                            title="Соответствие запросу"
+                          >
+                            {relPct}%
+                          </span>
+                        )}
+                        {(d.match_signals ?? []).map((s) => (
+                          <span key={`m-${s}`} className="px-1.5 py-0.5 rounded bg-green-50 text-green-700 border border-green-200">
+                            ✓ {s}
+                          </span>
+                        ))}
+                        {(d.mismatch_signals ?? []).map((s) => (
+                          <span key={`x-${s}`} className="px-1.5 py-0.5 rounded bg-red-50 text-red-700 border border-red-200">
+                            ✗ {s}
+                          </span>
+                        ))}
+                        {(d.unknown_signals ?? []).map((s) => (
+                          <span key={`u-${s}`} className="px-1.5 py-0.5 rounded bg-gray-50 text-gray-600 border border-gray-200">
+                            ? {s}
+                          </span>
+                        ))}
+                      </div>
+                    </li>
+                  );
+                })}
               </ol>
             </>
           ) : null}
@@ -142,7 +226,7 @@ function SearchInner() {
               <CornerDownLeft className="inline w-3 h-3 mr-1 -mt-0.5" />
               исправлено из «{from}» ·{" "}
               <Link
-                href={`/search?q=${encodeURIComponent(from)}&nofix=1`}
+                href={`/search?${searchLinkParams(from, { nofix: true, city }).toString()}`}
                 className="text-[var(--color-accent)] hover:underline"
               >
                 искать как написал
@@ -156,7 +240,7 @@ function SearchInner() {
             >
               без исправлений ·{" "}
               <Link
-                href={`/search?q=${encodeURIComponent(q)}`}
+                href={`/search?${searchLinkParams(q, { city }).toString()}`}
                 className="text-[var(--color-accent)] hover:underline"
               >
                 включить
@@ -232,6 +316,17 @@ function EmptyState({ query }: { query: string }) {
       </div>
     </motion.div>
   );
+}
+
+function searchLinkParams(
+  query: string,
+  opts: { nofix?: boolean; city?: string },
+) {
+  const sp = new URLSearchParams();
+  sp.set("q", query);
+  if (opts.nofix) sp.set("nofix", "1");
+  if (opts.city) sp.set("city", opts.city);
+  return sp;
 }
 
 function Pill({

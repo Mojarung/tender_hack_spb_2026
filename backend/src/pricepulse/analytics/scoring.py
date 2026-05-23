@@ -53,3 +53,17 @@ def best_deal_score(
         + w.seller_trust * seller_trust
         - w.delivery * (delivery_days / 30.0)
     )
+
+
+def composite_rank_score(deal_score: float, relevance: float, query_conf: float) -> float:
+    """Combine deal_score and relevance into final ranking signal.
+
+    - relevance is centered around 0.5 so that a "no info" query (relevance=0.5)
+      contributes 0 — ranking falls back to deal_score.
+    - The relevance weight grows with query_conf: confident queries lean heavily
+      on attribute match; vague queries lean on price/rating.
+    """
+    qc = max(0.0, min(1.0, query_conf))
+    w_rel = 0.6 + 0.2 * qc          # 0.60 .. 0.80
+    w_deal = 1.0 - w_rel             # 0.40 .. 0.20
+    return w_rel * (relevance - 0.5) + w_deal * deal_score

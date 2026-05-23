@@ -17,6 +17,7 @@ async def search(req: SearchRequest) -> SearchResponse:
         max_per_source=req.max_per_source,
         sources=req.sources,
         nofix=req.nofix,
+        city=req.city,
     )
     took_ms = int((time.perf_counter() - started) * 1000)
     return SearchResponse(

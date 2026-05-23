@@ -1,4 +1,4 @@
-"""Megamarket (Сбер) adapter — default candidate for the 4th source.
+"""Megamarket (Sber) adapter — default candidate for the 4th source.
 
 Free-mode strategy:
     POST https://megamarket.ru/api/mobile/v2/catalogService/catalog/search
@@ -54,7 +54,11 @@ def _to_offer(item: dict[str, Any]) -> ProductOffer | None:
     if not name or final in (None, 0):
         return None
     goods_id = item.get("goodsId") or item.get("goods_id") or item.get("id")
-    url = item.get("webUrl") or item.get("url") or (f"{_BASE}/catalog/details/{goods_id}/" if goods_id else None)
+    url = (
+        item.get("webUrl")
+        or item.get("url")
+        or (f"{_BASE}/catalog/details/{goods_id}/" if goods_id else None)
+    )
     if not url:
         return None
     if url.startswith("/"):
@@ -77,7 +81,11 @@ def _to_offer(item: dict[str, Any]) -> ProductOffer | None:
     elif isinstance(rating_node, (int, float)):
         rating = float(rating_node)
 
-    seller = (item.get("merchant") or {}).get("name") if isinstance(item.get("merchant"), dict) else None
+    seller = (
+        (item.get("merchant") or {}).get("name")
+        if isinstance(item.get("merchant"), dict)
+        else None
+    )
 
     return ProductOffer(
         source=SourceKind.RUNET,   # reported under the floating-source group
@@ -139,8 +147,8 @@ class MegamarketScraper:
                 async with AsyncSession(impersonate="chrome131", timeout=self._timeout) as s:
                     # Warm-up: pick up mg_sid from the homepage.
                     await s.get(_BASE, headers=_HEADERS)
-                    resp = await s.post(_SEARCH, headers=_HEADERS, content=orjson.dumps(body))
-            except Exception as exc:  # noqa: BLE001
+                    resp = await s.post(_SEARCH, headers=_HEADERS, data=orjson.dumps(body))
+            except Exception as exc:
                 scrape_requests_total.labels(source=src, outcome="timeout", proxy_tier="none").inc()
                 log.warning("megamarket.fetch_failed", error=str(exc))
                 return ScrapeResult(source=self.source, offers=[], error=f"mm fetch failed: {exc}")
@@ -156,7 +164,9 @@ class MegamarketScraper:
             try:
                 data = orjson.loads(resp.content)
             except orjson.JSONDecodeError:
-                scrape_requests_total.labels(source=src, outcome="http_5xx", proxy_tier="none").inc()
+                scrape_requests_total.labels(
+                    source=src, outcome="http_5xx", proxy_tier="none",
+                ).inc()
                 return ScrapeResult(source=self.source, offers=[], error="mm non-json")
 
             items = ((data.get("data") or {}).get("catalogListing") or {}).get("items") or []

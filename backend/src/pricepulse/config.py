@@ -58,10 +58,10 @@ class Settings(BaseSettings):
     s3_bucket: str = "pricepulse-images"
     s3_region: str = "us-east-1"
 
-    # Local LLM (Gemma 4 via Ollama)
+    # Local LLM via Ollama. Text fallback defaults to a small CPU-friendly model.
     ollama_url: str = "http://ollama:11434"
     ollama_vision_model: str = "gemma4:e4b"
-
+    ollama_text_model: str = "qwen2.5:0.5b"
     # Notifications
     ntfy_url: str = "http://ntfy/pricepulse-alerts"
     apprise_url: str = "http://apprise:8000/notify/pricepulse"
