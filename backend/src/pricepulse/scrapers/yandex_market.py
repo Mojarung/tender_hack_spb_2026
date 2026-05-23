@@ -230,7 +230,7 @@ class YandexMarketScraper:
                     error=f"ya_market fetch failed: {exc}"
                 )
 
-            captcha = "showcaptcha" in resp.url
+            captcha = "showcaptcha" in str(resp.url)
             if resp.status_code != 200 or captcha:
                 outcome = "captcha" if captcha else "blocked"
                 scrape_requests_total.labels(source=src, outcome=outcome, proxy_tier="none").inc()

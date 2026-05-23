@@ -54,6 +54,16 @@ def _price_from_text(text: str) -> Decimal | None:
     return Decimal(cleaned)
 
 
+def _safe_float(value: Any) -> float | None:
+    """Best-effort float — survives '4,5', None, 0, '' without raising."""
+    if value is None or value == "":
+        return None
+    try:
+        return float(str(value).replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+
+
 def _iter_search_widgets(layout_widgets: dict[str, Any]) -> list[dict[str, Any]]:
     """Find every `widgetStates` key that holds search-result items.
 
@@ -143,7 +153,7 @@ def _extract_offers(widget_payloads: list[dict[str, Any]], limit: int) -> list[P
                     "seller": str(tracking.get("sellerName") or ""),
                 },
                 seller=tracking.get("sellerName"),
-                rating=float(tracking["rating"]) if tracking.get("rating") else None,
+                rating=_safe_float(tracking.get("rating")),
                 fetched_at=now,
                 cached=False,
             )

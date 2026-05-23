@@ -25,13 +25,19 @@ export interface SourceGroup {
   source: Source;
   count: number;
   min_price: string | null;
+  avg_price?: string | null;
   median_price?: string | null;
   currency: string;
   offers: ProductOffer[];
   error?: string | null;
 }
 
-export interface NormalizedQuery { raw: string; normalized: string; expansions: string[]; }
+export interface NormalizedQuery {
+  raw: string;
+  normalized: string;
+  expansions: string[];
+  alternates?: string[];
+}
 export interface RankedOffer { offer: ProductOffer; score: number; rank: number; }
 
 export interface SearchResponse {

@@ -121,6 +121,9 @@ class SearchOrchestrator:
 
         adapters = self._pick(sources)
         queue: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()
+        # Captured per-source results — used after fan-out to compute top_deals
+        # in the same shape as the non-streaming endpoint.
+        groups: dict[SourceKind, SourceGroup] = {}
 
         async def _drive(adapter: ScraperProtocol) -> None:
             await queue.put(("source_started", {"source": adapter.source.value}))
@@ -139,6 +142,7 @@ class SearchOrchestrator:
                 region_id=region_id,
             )
             group = _to_group(result)
+            groups[adapter.source] = group
             await queue.put((
                 "source_finished",
                 {
@@ -155,6 +159,11 @@ class SearchOrchestrator:
 
         async def _drain() -> None:
             await asyncio.gather(*[_drive(a) for a in adapters])
+            top_deals = _rank_top_deals(list(groups.values()), top_k=10)
+            await queue.put((
+                "top_deals",
+                {"top_deals": [d.model_dump(mode="json") for d in top_deals]},
+            ))
             await queue.put(None)   # sentinel
 
         drainer = asyncio.create_task(_drain())
@@ -165,7 +174,15 @@ class SearchOrchestrator:
                     break
                 yield item
         finally:
+            # Wait for the drainer to finish so we don't leak the task or
+            # swallow exceptions raised inside _drain.
             drainer.cancel()
+            try:
+                await drainer
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                log.warning("orchestrator.drainer_failed", error=str(exc))
         took_ms = int((time.perf_counter() - started) * 1000)
         yield "done", {"took_ms": took_ms}
 
@@ -264,6 +281,22 @@ class SearchOrchestrator:
 
 _CENTS = Decimal("0.01")
 
+# Per-source review-count keys. Adapters use different names; the
+# Best-Deal score needs a uniform integer regardless of source.
+_REVIEW_KEYS: tuple[str, ...] = ("feedbacks", "reviews", "rating_count")
+
+
+def _reviews_count(chars: dict[str, str]) -> int:
+    for key in _REVIEW_KEYS:
+        v = chars.get(key)
+        if not v:
+            continue
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            continue
+    return 0
+
 
 def _to_group(result: ScrapeResult) -> SourceGroup:
     offers = result.offers
@@ -304,7 +337,7 @@ def _rank_top_deals(groups: list[SourceGroup], top_k: int = 10) -> list[RankedOf
         score = best_deal_score(
             price=o.price,
             rating=o.rating or 0.0,
-            reviews_count=int(o.characteristics.get("feedbacks") or 0),
+            reviews_count=_reviews_count(o.characteristics),
             price_population=prices,
         )
         ranked.append((score, o))

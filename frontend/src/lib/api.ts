@@ -1,7 +1,40 @@
 import { DEFAULT_REGION_ID } from "./regions";
 import type {
-  ChatResponse, Favorite, SearchResponse, User,
+  ChatResponse, Favorite, NormalizedQuery, ProductOffer, RankedOffer,
+  SearchResponse, Source, User,
 } from "./types";
+
+type SearchStreamEventName =
+  | "query_normalized" | "source_started" | "offer"
+  | "source_finished" | "top_deals" | "done";
+
+export interface SourceFinishedEvent {
+  source: Source;
+  count: number;
+  min_price: string | null;
+  avg_price: string | null;
+  median_price: string | null;
+  error: string | null;
+  cached: boolean;
+}
+
+export interface SearchStreamHandlers {
+  onQueryNormalized?: (q: NormalizedQuery) => void;
+  onSourceStarted?: (e: { source: Source }) => void;
+  onOffer?: (e: { source: Source; offer: ProductOffer }) => void;
+  onSourceFinished?: (e: SourceFinishedEvent) => void;
+  onTopDeals?: (e: { top_deals: RankedOffer[] }) => void;
+  onDone?: (e: { took_ms: number }) => void;
+  onError?: (err: Error) => void;
+}
+
+export interface SearchStreamOptions {
+  nofix?: boolean;
+  region_id?: number;
+  handlers?: SearchStreamHandlers;
+}
+
+export interface SearchStreamHandle { close: () => void }
 
 const BASE =
   (typeof process !== "undefined" ? process.env.NEXT_PUBLIC_API_URL : undefined) ??
@@ -65,6 +98,56 @@ export const api = {
         region_id: opts?.region_id ?? DEFAULT_REGION_ID,
       }),
     }),
+
+  searchStream: (
+    query: string,
+    max_per_source = 16,
+    opts: SearchStreamOptions = {},
+  ): SearchStreamHandle => {
+    const params = new URLSearchParams({
+      query,
+      max_per_source: String(max_per_source),
+      region_id: String(opts.region_id ?? DEFAULT_REGION_ID),
+      nofix: String(opts.nofix ?? false),
+    });
+    const url = `${BASE}/api/v1/search/stream?${params.toString()}`;
+    const es = new EventSource(url);
+    const handlers = opts.handlers ?? {};
+
+    const wire = <T,>(name: SearchStreamEventName, fn?: (data: T) => void) => {
+      if (!fn) return;
+      es.addEventListener(name, (evt: MessageEvent) => {
+        try { fn(JSON.parse(evt.data) as T); } catch { /* ignore malformed */ }
+      });
+    };
+
+    wire<NormalizedQuery>("query_normalized", handlers.onQueryNormalized);
+    wire<{ source: Source }>("source_started", handlers.onSourceStarted);
+    wire<{ source: Source; offer: ProductOffer }>("offer", handlers.onOffer);
+    wire<SourceFinishedEvent>("source_finished", handlers.onSourceFinished);
+    wire<{ top_deals: RankedOffer[] }>("top_deals", handlers.onTopDeals);
+
+    // 'done' is the only event we always own — close the connection so the
+    // browser doesn't auto-reconnect after the search is complete.
+    es.addEventListener("done", (evt: MessageEvent) => {
+      try {
+        const data = JSON.parse(evt.data) as { took_ms: number };
+        handlers.onDone?.(data);
+      } catch { /* ignore malformed */ }
+      es.close();
+    });
+
+    // Browser only fires onerror after the first reconnect attempt; we
+    // surface it so the UI can stop the spinner.
+    es.onerror = () => {
+      // readyState === CLOSED → terminal failure (not a transient blip).
+      if (es.readyState === EventSource.CLOSED) {
+        handlers.onError?.(new Error("stream closed"));
+      }
+    };
+
+    return { close: () => es.close() };
+  },
 
   favorites: {
     list: () => http<Favorite[]>("/api/v1/favorites"),

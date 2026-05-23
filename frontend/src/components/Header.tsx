@@ -152,7 +152,10 @@ function RegionSelect() {
   }
 
   return (
-    <label className="relative hidden lg:block" title="Регион поиска">
+    <label
+      className="relative hidden lg:block"
+      title="Регион поиска. Применяется к Я.Маркету; WB / Ozon / Рунет используют общий каталог."
+    >
       <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--color-ink-4)] pointer-events-none" />
       <select
         value={current.id}

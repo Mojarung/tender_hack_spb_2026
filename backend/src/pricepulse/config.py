@@ -1,6 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -85,6 +86,17 @@ class Settings(BaseSettings):
     # Override Postgres entirely with a SQLite DSN when set — useful for
     # `uv run uvicorn ...` without a running Postgres container.
     sqlite_url: str = ""    # e.g. "sqlite+aiosqlite:///./pricepulse.db"
+
+    @model_validator(mode="after")
+    def _prod_must_override_secrets(self) -> "Settings":
+        # Hackathon defense runs APP_ENV=local — this only bites in real deployments,
+        # where shipping with the dev JWT secret would let anyone mint admin tokens.
+        if self.app_env == "prod" and self.auth_jwt_secret.startswith("dev-only"):
+            raise ValueError(
+                "AUTH_JWT_SECRET is at its dev default in APP_ENV=prod — "
+                "generate one with `openssl rand -hex 32` and set it in env."
+            )
+        return self
 
     @property
     def database_url(self) -> str:
