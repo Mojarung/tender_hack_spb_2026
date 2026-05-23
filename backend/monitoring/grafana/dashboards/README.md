@@ -18,4 +18,6 @@ curl -sSL https://grafana.com/api/dashboards/16110/revisions/latest/download \
   -o monitoring/grafana/dashboards/fastapi-observability.json
 ```
 
-Свой кастомный `live-scraping.json` — см. описание в [../../../docs/anti-bot.md §7.1](../../../docs/anti-bot.md).
+Свой кастомный `live-scraping.json` — метрики экспортируются в `/metrics`
+(см. `prometheus_fastapi_instrumentator` + кастомные `scrape_*` counters в
+`backend/src/pricepulse/observability/`).

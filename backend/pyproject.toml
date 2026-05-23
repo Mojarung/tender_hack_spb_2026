@@ -57,11 +57,10 @@ nlp = [
     "transformers>=4.46",
     "torch>=2.5",
 ]
-# CAPTCHA solving (only used if FEATURE_USE_2CAPTCHA=true).
+# Local slider-CAPTCHA solver (OpenCV template matching, on-prem). No external
+# captcha-service deps — methodology p.5 bans third-party APIs.
 captcha = [
-    "2captcha-python>=1.5",
     "opencv-python-headless>=4.10",
-    "primp>=0.6",
 ]
 
 [dependency-groups]

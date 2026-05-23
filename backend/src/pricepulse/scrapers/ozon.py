@@ -7,8 +7,7 @@ Strategy (free-mode L1):
     real client.
 
 If we still get 403 / antibot redirect → caller is expected to
-escalate to L2 (Patchright stealth browser) via the cascade router.
-See backend/docs/anti-bot.md §5.2.
+escalate to L2 (nodriver stealth browser) via the cascade router.
 """
 
 from __future__ import annotations

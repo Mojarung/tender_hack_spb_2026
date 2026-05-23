@@ -175,7 +175,37 @@ services:
     networks: [pricepulse]
 
   # ===== Local LLM (Gemma 4) for CAPTCHA + 4th-source extraction =====
-  # del ollama
+  #
+  # **Microservice, GPU-host friendly.** В проде Ollama поднимается на отдельной
+  # машине с GPU, backend ходит к нему по HTTP через `OLLAMA_URL`. Compose-блок
+  # ниже — только для локального dev (`docker compose --profile gpu up -d ollama`),
+  # CPU-инференс для vision слишком медленный.
+  #
+  # First-time setup on the chosen Ollama host:
+  #     ollama pull gemma4:e4b
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["gpu"]                # opt-in: not started by default
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollamadata:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    # NVIDIA Container Toolkit required on the host.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+    networks: [pricepulse]
 
   # ===== Notifications =====
   ntfy:
@@ -275,8 +305,11 @@ services:
     networks: [pricepulse]
 
   # ===== n8n: orchestration + alerts + live demo board =====
+  # Opt-in (`docker compose --profile ops up -d n8n`). Никакой бизнес-логики
+  # на n8n не висит — он используется только для алёртов в демо-режиме.
   n8n:
     image: docker.n8n.io/n8nio/n8n:latest
+    profiles: ["ops"]
     environment:
       N8N_BASIC_AUTH_ACTIVE: "true"
       N8N_BASIC_AUTH_USER: ${N8N_BASIC_AUTH_USER:-admin}

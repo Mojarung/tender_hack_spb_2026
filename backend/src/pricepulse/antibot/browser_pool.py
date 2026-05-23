@@ -5,7 +5,7 @@ driving Chrome straight over the DevTools Protocol. That defeats
 "automation-protocol fingerprinting" — a detection layer that patched
 Playwright forks (Patchright et al.) still leak. In the May 2026
 anti-detect benchmark nodriver scored 28/31 vs Cloudflare with zero hard
-blocks. See backend/docs/anti-bot.md §5.
+blocks. See CLAUDE.md → Anti-bot слой.
 
 Used as L2 for Ozon / Yandex Market when L1 (curl_cffi) is blocked.
 

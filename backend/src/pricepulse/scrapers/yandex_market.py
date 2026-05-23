@@ -1,6 +1,6 @@
-"""Yandex Market adapter — JSON-LD-first, Camoufox-fallback.
+"""Yandex Market adapter — JSON-LD-first, nodriver-fallback.
 
-Free-mode strategy:
+Strategy:
     1. curl_cffi (Chrome 131 impersonate) GET to /search?text=...
     2. Parse <script type="application/ld+json"> blocks for Schema.org
        Product / ItemList. This works as long as Yandex returns the page
@@ -8,8 +8,6 @@ Free-mode strategy:
     3. On 200 + empty JSON-LD or on captcha redirect → escalate via
        cascade router (out of scope for this adapter — orchestrator
        handles it).
-
-See backend/docs/anti-bot.md §5.3.
 """
 
 from __future__ import annotations

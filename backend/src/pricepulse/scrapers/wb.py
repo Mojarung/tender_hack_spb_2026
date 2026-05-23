@@ -2,7 +2,7 @@
 
 Public JSON, no auth, no captcha. Returns clean structured data.
 The only protection is rate-limit per IP (~5 RPS); we keep it low and
-back off on 429. See backend/docs/anti-bot.md §5.1.
+back off on 429.
 """
 
 from __future__ import annotations

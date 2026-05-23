@@ -16,11 +16,10 @@ docker compose exec n8n n8n import:workflow --separate \
   --input=/home/node/.n8n/workflows
 ```
 
-## Базовые workflow (см. backend/docs/anti-bot.md §7.2)
+## Базовые workflow
 
 1. **smoke-test.json** — Schedule `*/5 * * * *` → 4 параллельных HTTP к `api:8000/scrape/{source}` → IF → Telegram alert.
-2. **captcha-fallback.json** — Webhook от FastAPI при >5 капч подряд → Switch по source → переключение режима через `POST api:8000/admin/fallback/{source}` → Telegram log → Postgres insert.
-3. **live-demo-board.json** — Webhook → 4 параллельных HTTP → Merge → Respond to Webhook. Открывается на демо как живой canvas.
+2. **live-demo-board.json** — Webhook → 4 параллельных HTTP → Merge → Respond to Webhook. Открывается на демо как живой canvas.
 
 ## MCP
 
