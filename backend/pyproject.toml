@@ -47,6 +47,8 @@ dependencies = [
     # not a concern for the hackathon project. Used by antibot/browser_pool.py
     # to warm Ozon's anti-bot cookies (see antibot/browser_fetch.py).
     "nodriver>=0.50",
+    # ===== AI enrichment / LLM APIs =====
+    "ollama>=0.4.0",
 ]
 
 [dependency-groups]
