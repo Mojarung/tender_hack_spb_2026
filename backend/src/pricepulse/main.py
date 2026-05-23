@@ -36,6 +36,31 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    # Pre-warm both stealth browsers SEQUENTIALLY at app boot. Without
+    # this, the first concurrent `asyncio.gather(ozon_search, wb_search)`
+    # races two `uc.start()` calls in the same process — nodriver
+    # internal state gets confused and one launch fails with
+    # "Failed to connect to browser". Pre-warming pays the launch cost
+    # once at startup (~5-6 s combined) and eliminates the race.
+    from pricepulse.antibot.browser_pool import get_browser_pool
+    from pricepulse.antibot.wb_browser import get_wb_browser
+
+    try:
+        pool = await get_browser_pool()
+        # Force Ozon's Chrome to fully launch by acquiring + releasing a tab.
+        async with pool.acquire("warmup"):
+            pass
+    except Exception as exc:    # never fatal — first request will retry
+        import structlog
+        structlog.get_logger(__name__).warning("ozon_browser_prewarm_failed", error=str(exc))
+    try:
+        wb = await get_wb_browser()
+        await wb._ensure_started()    # type: ignore[attr-defined]
+    except Exception as exc:
+        import structlog
+        structlog.get_logger(__name__).warning("wb_browser_prewarm_failed", error=str(exc))
+
     yield
     # Tear singletons down cleanly on app exit.
     await close_search_cache()

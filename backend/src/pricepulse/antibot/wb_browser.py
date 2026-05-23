@@ -141,16 +141,24 @@ EXTRACTOR_JS = r"""
       if (!nmM) continue;
       const nm = nmM[1];
       if (seen.has(nm)) continue;
-      seen.add(nm);
       const nameEl = pickFirst(card, NAME_SELECTORS);
-      const name = (nameEl ? nameEl.innerText : (a ? a.innerText : '')).trim();
+      // Reject cards that don't carry a real product-name element —
+      // WB layout includes recommendation/sponsor tiles that share the
+      // `.product-card` class but only contain images + nav. Without
+      // this filter we ship empty-name offers (14 of 16 cards observed
+      // for an "iphone 15" search were noise tiles).
+      if (!nameEl) continue;
+      const rawName = nameEl.innerText.trim();
+      const cleanName = rawName.replace(/^[\/\\\s|·•·]+/, '').trim();
+      if (!cleanName || cleanName.length < 3) continue;
+      seen.add(nm);
       const priceEl = pickFirst(card, PRICE_SELECTORS);
       const priceRub = parseRub(priceEl ? priceEl.innerText : '');
       const brandEl = card.querySelector('.product-card__brand');
       const img = card.querySelector('img');
       out.products.push({
         nm: Number(nm), url,
-        name: name,
+        name: cleanName,
         price_rub: priceRub,
         brand: (brandEl ? brandEl.innerText : '').trim(),
         image: img ? (img.src || img.dataset.src || '') : '',
@@ -282,8 +290,8 @@ class WBBrowserSearch:
         self,
         query: str,
         *,
-        settle_s: float = 3.0,
-        deadline_s: float = 12.0,
+        settle_s: float = 4.0,
+        deadline_s: float = 15.0,
     ) -> dict[str, Any]:
         """Navigate the SPA search page + read products from DOM.
 
