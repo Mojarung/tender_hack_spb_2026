@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     # false on a desktop/xvfb box for the strongest anti-detect profile.
     browser_headless: bool = True
 
-    wb_rpm: int = 60
+    wb_rpm: int = 6
     ozon_rpm: int = 20
     yandex_market_rpm: int = 10
     runet_rpm: int = 30
