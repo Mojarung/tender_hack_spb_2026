@@ -129,7 +129,27 @@ function SearchInner() {
         },
         onTopDeals: (e) => {
           if (cancelled) return;
-          setData((d) => d ? { ...d, top_deals: e.top_deals } : d);
+          // Merge rerank_scores back into group offers so the ↑N% badge
+          // appears in the grid (the per-offer SSE events were emitted before
+          // reranking, so they arrive without the score).
+          const scoreMap = new Map<string, number>();
+          for (const rd of e.top_deals) {
+            if (rd.offer.rerank_score != null) {
+              scoreMap.set(rd.offer.url, rd.offer.rerank_score);
+            }
+          }
+          setData((d) => {
+            if (!d) return d;
+            const groups = scoreMap.size > 0
+              ? d.groups.map((g) => ({
+                  ...g,
+                  offers: g.offers.map((o) =>
+                    scoreMap.has(o.url) ? { ...o, rerank_score: scoreMap.get(o.url) } : o
+                  ),
+                }))
+              : d.groups;
+            return { ...d, top_deals: e.top_deals, groups };
+          });
         },
         onDone: (e) => {
           if (cancelled) return;
@@ -175,7 +195,11 @@ function SearchInner() {
   }
 
   const all = data?.groups?.flatMap((g) => g.offers) ?? [];
-  const offers = filter === "all" ? all : all.filter((o) => o.source === filter);
+  const hasRerank = all.some((o) => o.rerank_score != null);
+  const sortedAll = hasRerank
+    ? [...all].sort((a, b) => (b.rerank_score ?? 0) - (a.rerank_score ?? 0))
+    : all;
+  const offers = filter === "all" ? sortedAll : sortedAll.filter((o) => o.source === filter);
   const empty = !loading && all.length === 0;
   const sourceErrors = data?.groups?.filter((g) => g.error) ?? [];
   const allSourcesFailed = !loading && !!data?.groups?.length && sourceErrors.length === data.groups.length;

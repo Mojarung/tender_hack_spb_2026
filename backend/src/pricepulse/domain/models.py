@@ -30,6 +30,7 @@ class ProductOffer(BaseModel):
     reviews_count: int | None = None
     fetched_at: datetime
     cached: bool = False
+    rerank_score: float | None = None
 
 
 class SourceGroup(BaseModel):

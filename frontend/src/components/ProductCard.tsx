@@ -134,6 +134,15 @@ export function ProductCard({ offer, index = 0, highlight }: Props) {
             )}
             {feedbacks && <span>· {feedbacks} отзывов</span>}
             {offer.seller && <span className="truncate">· {offer.seller}</span>}
+            {offer.rerank_score != null && (
+              <span
+                className="ml-auto shrink-0 inline-flex items-center gap-0.5 font-medium tabular-nums"
+                style={{ color: offer.rerank_score >= 0.7 ? "var(--color-good, #22c55e)" : offer.rerank_score >= 0.4 ? "var(--color-warn, #f59e0b)" : "var(--color-ink-4)" }}
+                title={`Релевантность запросу: ${Math.round(offer.rerank_score * 100)}%`}
+              >
+                ↑{Math.round(offer.rerank_score * 100)}%
+              </span>
+            )}
           </div>
         </div>
 

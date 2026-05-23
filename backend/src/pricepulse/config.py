@@ -79,6 +79,14 @@ class Settings(BaseSettings):
     # without general-RU spell correction (brand thesaurus + pymorphy3 still work).
     spellcheck_url: str = ""
 
+    # Cross-encoder reranker (BAAI/bge-reranker-v2-m3 on GPU).
+    # Empty disables; orchestrator returns results in scraper order.
+    reranker_url: str = "https://projects-shirt-pre-guided.trycloudflare.com"
+    reranker_timeout_s: float = 5.0
+    # Kept for documentation / future filtering; not used for hard cutoff now.
+    reranker_score_threshold: float = 0.3
+    reranker_top_n: int = 50
+
     # S3 / MinIO — image cache
     s3_endpoint_url: str = "http://minio:9000"
     # Public URL the browser sees when we 302 to a cached image. In dev with

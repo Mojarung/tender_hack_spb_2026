@@ -25,6 +25,7 @@ from pricepulse.config import get_settings
 from pricepulse.domain.enums import SourceKind
 from pricepulse.domain.models import NormalizedQuery, ProductOffer, RankedOffer, SourceGroup
 from pricepulse.enrichment.normalize import normalize_query
+from pricepulse.enrichment.reranker_client import RerankerClient
 from pricepulse.scrapers.base import ScrapeResult, ScraperProtocol
 
 # TEMP: imports kept (commented in registry below) so reverting is one
@@ -115,12 +116,13 @@ class SearchOrchestrator:
     ) -> tuple[NormalizedQuery, list[SourceGroup], list[RankedOffer]]:
         normalized = await normalize_query(query, fix=not nofix, cache=self._cache)
         adapters = self._pick(sources)
-        results = await asyncio.gather(
+        results: tuple[ScrapeResult, ...] = await asyncio.gather(
             *[
                 self._safe_call(a, normalized, max_per_source, region_id=region_id)
                 for a in adapters
             ]
         )
+        results = await _apply_reranker(normalized.normalized, list(results))
         groups = [_to_group(r) for r in results]
         top_deals = _rank_top_deals(groups, top_k=10)
         return normalized, groups, top_deals
@@ -179,7 +181,18 @@ class SearchOrchestrator:
 
         async def _drain() -> None:
             await asyncio.gather(*[_drive(a) for a in adapters])
-            top_deals = _rank_top_deals(list(groups.values()), top_k=10)
+            # Rerank cross-source after all adapters finish (cross-encoder needs
+            # the full batch; individual SSE offer events were already emitted).
+            source_results = [
+                ScrapeResult(source=src, offers=grp.offers, error=grp.error)
+                for src, grp in groups.items()
+            ]
+            reranked_results = await _apply_reranker(normalized.normalized, source_results)
+            reranked_groups = [_to_group(r) for r in reranked_results]
+            # In the stream path, send ALL scored offers so the frontend can
+            # backfill rerank_score on every card (not just the top-10 sidebar).
+            all_count = sum(len(g.offers) for g in reranked_groups)
+            top_deals = _rank_top_deals(reranked_groups, top_k=all_count or 10)
             await queue.put((
                 "top_deals",
                 {"top_deals": [d.model_dump(mode="json") for d in top_deals]},
@@ -366,6 +379,39 @@ class SearchOrchestrator:
         return ScrapeResult(source=source, offers=offers, cached=True)
 
 
+async def _apply_reranker(query: str, results: list[ScrapeResult]) -> list[ScrapeResult]:
+    """Run the cross-encoder reranker across all offers from all sources.
+
+    Returns a new list of ScrapeResults where each source's offers are sorted
+    by rerank_score desc and every offer has rerank_score set. Falls back to
+    the original results unchanged if the reranker is disabled or fails.
+    """
+    reranker = RerankerClient()
+    if not reranker.enabled:
+        return results
+
+    all_offers: list[ProductOffer] = [o for r in results for o in r.offers]
+    if not all_offers:
+        return results
+
+    ranked_offers = await reranker.rerank(query, all_offers)
+
+    # Build a score lookup keyed by (source, url string) — url is unique per offer.
+    score_map: dict[tuple[SourceKind, str], float | None] = {
+        (o.source, str(o.url)): o.rerank_score for o in ranked_offers
+    }
+
+    new_results: list[ScrapeResult] = []
+    for r in results:
+        scored = [
+            o.model_copy(update={"rerank_score": score_map.get((o.source, str(o.url)))})
+            for o in r.offers
+        ]
+        scored.sort(key=lambda o: o.rerank_score or 0.0, reverse=True)
+        new_results.append(ScrapeResult(source=r.source, offers=scored, error=r.error, cached=r.cached))
+    return new_results
+
+
 _CENTS = Decimal("0.01")
 
 # Per-source review-count keys. Adapters use different names; the
@@ -409,17 +455,28 @@ def _to_group(result: ScrapeResult) -> SourceGroup:
 def _rank_top_deals(groups: list[SourceGroup], top_k: int = 10) -> list[RankedOffer]:
     """Best-Deal Score across ALL sources, returns top-K as RankedOffer.
 
-    Price population = every offer in the result set, so price_z is computed
-    cross-source — that lets a cheap Runet offer outrank a more famous WB
-    one on identical specs.
+    When rerank_score is present (reranker was active), it dominates: offers
+    are sorted cross-source by rerank_score so the most query-relevant items
+    float to the top. Best-Deal Score is used as tiebreaker / fallback when
+    reranker was disabled or returned no score for an offer.
     """
     all_offers: list[ProductOffer] = []
     for g in groups:
         all_offers.extend(g.offers)
     if not all_offers:
         return []
+
+    has_rerank = any(o.rerank_score is not None for o in all_offers)
+
+    if has_rerank:
+        ranked = sorted(all_offers, key=lambda o: o.rerank_score or 0.0, reverse=True)
+        return [
+            RankedOffer(offer=o, score=round(o.rerank_score or 0.0, 4), rank=i + 1)
+            for i, o in enumerate(ranked[:top_k])
+        ]
+
     prices = [o.price for o in all_offers]
-    ranked: list[tuple[float, ProductOffer]] = []
+    ranked_bds: list[tuple[float, ProductOffer]] = []
     for o in all_offers:
         score = best_deal_score(
             price=o.price,
@@ -427,9 +484,9 @@ def _rank_top_deals(groups: list[SourceGroup], top_k: int = 10) -> list[RankedOf
             reviews_count=_reviews_count(o.characteristics),
             price_population=prices,
         )
-        ranked.append((score, o))
-    ranked.sort(key=lambda x: x[0], reverse=True)
+        ranked_bds.append((score, o))
+    ranked_bds.sort(key=lambda x: x[0], reverse=True)
     return [
         RankedOffer(offer=o, score=round(s, 4), rank=i + 1)
-        for i, (s, o) in enumerate(ranked[:top_k])
+        for i, (s, o) in enumerate(ranked_bds[:top_k])
     ]

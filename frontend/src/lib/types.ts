@@ -32,6 +32,7 @@ export interface ProductOffer {
   reviews_count: number | null;
   fetched_at: string;
   cached: boolean;
+  rerank_score?: number | null;
 }
 
 export interface SourceGroup {
