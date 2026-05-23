@@ -109,10 +109,11 @@ services:
       - "8080:8080"
     networks: [pricepulse]
 
-  # JamSpell RU spell-correction microservice (backend/jamspell/).
-  # Self-hosted N-gram spellchecker — used by enrichment/normalize.py.
-  jamspell:
-    build: ./jamspell
+  # Russian spell-correction microservice — SAGE FRED-T5 distilled-95M
+  # (backend/spellcheck/). Self-hosted transformer trained by SberDevices
+  # for Russian spelling, used by enrichment/normalize.py.
+  spellcheck:
+    build: ./spellcheck
     ports:
       - "8095:8080"
     networks: [pricepulse]
@@ -122,7 +123,7 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 120s    # SAGE T5 takes ~15-30s to load on first boot
     restart: unless-stopped
 
   # ===== Observability: Prometheus + Grafana + node/container exporters =====

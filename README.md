@@ -83,6 +83,19 @@ ollama pull gemma4:e4b
 
 ## CHANGELOG
 
+### 2026-05-23 (вечер) — апгрейд spell-correction
+
+- **JamSpell → SAGE FRED-T5 distilled-95M.** N-gram small-модель JamSpell
+  давала wrong-corrections («стирлная → сильная» вместо «стиральная»).
+  Заменили на дистиллированный transformer от Сбера (MIT, RUSpellRU F1 = 78.9
+  — выше GPT-4 на русской орфографии), 95M параметров / 383 МБ на диске.
+- `backend/spellcheck/` — новый сервис (transformers + torch CPU, ленивая
+  загрузка модели в lifespan, model запекается в image на этапе билда —
+  runtime без сетевых походов).
+- `enrichment/spellcheck_client.py`, `tests/unit/test_spellcheck.py`,
+  `SPELLCHECK_URL` env, `docker-compose.yml::spellcheck` сервис.
+- Старый `backend/jamspell/` и `JamSpellClient` удалены. 51 passed.
+
 ### 2026-05-23
 
 - **JamSpell микросервис** для общеязыковой RU-коррекции опечаток:

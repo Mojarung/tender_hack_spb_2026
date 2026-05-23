@@ -106,11 +106,14 @@ SearXNG + JSON-LD).
 - **SSE на фронте** — `frontend/` шлёт обычный POST, готовый `/search/stream` не используется.
 - **Характеристики товара** — реально заполнены только у WB.
 
-**Опечатки** теперь закрыты: `backend/jamspell/` — отдельный docker-микросервис
-(JamSpell C++ + RU-модель из `bakwc/JamSpell-models`), `enrichment/jamspell_client.py`
-ходит в него HTTP. Pipeline `normalize_query`: brand-RapidFuzz → JamSpell (общие RU
-опечатки) → translit → синонимы. Сервис self-hosted, `JAMSPELL_URL=""` отключает
-шаг полностью (graceful: если сервис лежит — `normalize_query` идёт без коррекции).
+**Опечатки** — закрыты транформером **SAGE FRED-T5 distilled-95M** от Сбера
+(MIT, RUSpellRU F1 = 78.9 — бьёт GPT-4 на русском spell). Сервис в
+`backend/spellcheck/` (FastAPI + transformers + torch CPU, ~2 ГБ image),
+клиент `enrichment/spellcheck_client.py` ходит HTTP. Pipeline `normalize_query`:
+brand-RapidFuzz → SpellCheck (контекстная RU-коррекция) → translit → синонимы.
+`SPELLCHECK_URL=""` отключает шаг (graceful: если сервис лежит — `normalize_query`
+идёт без коррекции). Предыдущая JamSpell-реализация выпилена — small-модель давала
+wrong-corrections («стирлная → сильная»).
 
 ## Ограничения и риски
 

@@ -5,9 +5,10 @@ Pipeline:
   1. ``_clean`` — Unicode NFKC, lowercase, strip punctuation, collapse spaces.
   2. ``correct_phrase`` — RapidFuzz vs the brand thesaurus (~60 tokens) —
      catches phonetic brand typos ("айвон" → "айфон").
-  3. **JamSpell** — N-gram Russian spell-correction via the local
-     ``jamspell-svc`` microservice (``backend/jamspell/``). Disabled when
-     ``JAMSPELL_URL`` is empty; degraded silently if the service is down.
+  3. **SpellCheck** — SAGE FRED-T5 distilled-95M (RuSpellRU F1 = 78.9)
+     via the local ``spellcheck-svc`` microservice (``backend/spellcheck/``).
+     Disabled when ``SPELLCHECK_URL`` is empty; degraded silently if the
+     service is down.
   4. ``translate`` — RU brand → canonical Latin form ("айфон" → "iphone").
   5. ``synonym_alternates`` — alternate query strings via the curated
      thesaurus + pymorphy3 lemmatisation.
@@ -23,7 +24,7 @@ import re
 import unicodedata
 
 from pricepulse.domain.models import NormalizedQuery
-from pricepulse.enrichment.jamspell_client import JamSpellClient
+from pricepulse.enrichment.spellcheck_client import SpellCheckClient
 from pricepulse.enrichment.synonym_thesaurus import synonym_alternates
 from pricepulse.enrichment.thesaurus import translate
 from pricepulse.enrichment.typos import correct_phrase
@@ -42,7 +43,7 @@ async def normalize_query(
     raw: str,
     *,
     fix: bool = True,
-    jamspell: JamSpellClient | None = None,
+    spellcheck: SpellCheckClient | None = None,
 ) -> NormalizedQuery:
     """`fix=False` bypasses typo + translit + synonyms (search raw text)."""
     cleaned = _clean(raw)
@@ -56,11 +57,11 @@ async def normalize_query(
     for orig, repl in brand_fixes:
         notes.append(f"опечатка: {orig} → {repl}")
 
-    # 2) JamSpell — general RU spell-correction. No-op when JAMSPELL_URL
-    #    is empty or the service is unreachable.
-    js = jamspell if jamspell is not None else JamSpellClient()
-    if js.enabled:
-        fixed = await js.fix(text)
+    # 2) SpellCheck — SAGE FRED-T5 distilled, general RU spelling.
+    #    No-op when SPELLCHECK_URL is empty or the service is unreachable.
+    sc = spellcheck if spellcheck is not None else SpellCheckClient()
+    if sc.enabled:
+        fixed = await sc.fix(text)
         if fixed and fixed != text:
             notes.append(f"опечатка: «{text}» → «{fixed}»")
             text = fixed

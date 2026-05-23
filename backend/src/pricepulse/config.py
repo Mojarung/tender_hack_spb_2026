@@ -42,10 +42,10 @@ class Settings(BaseSettings):
     # ZenRows / Gemini / DeepSeek keys are gone wholesale.
     searxng_url: str = "http://searxng:8080"
 
-    # JamSpell — self-hosted RU spell-correction microservice
-    # (backend/jamspell/). Empty disables it; normalize_query then runs
+    # Spell-correction microservice — SAGE FRED-T5 distilled-95M (Sber)
+    # at backend/spellcheck/. Empty disables it; normalize_query then runs
     # without general-RU spell correction (brand thesaurus + pymorphy3 still work).
-    jamspell_url: str = ""
+    spellcheck_url: str = ""
 
     # S3 / MinIO — image cache
     s3_endpoint_url: str = "http://minio:9000"
