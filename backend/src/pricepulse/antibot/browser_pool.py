@@ -184,26 +184,69 @@ class BrowserPool:
             )
             return self._browser
 
+    def _is_dead_browser_error(self, exc: BaseException) -> bool:
+        """Heuristic: did this exception come from a dropped CDP
+        websocket? nodriver doesn't expose a typed `BrowserClosed`, so
+        we match on the websockets library's `ConnectionClosed*`
+        family plus a couple of error-message fingerprints we've
+        observed when the user closes the Chrome window manually."""
+        name = type(exc).__name__
+        if name in {"ConnectionClosedError", "ConnectionClosed", "ConnectionClosedOK"}:
+            return True
+        s = str(exc).lower()
+        return any(
+            tok in s for tok in (
+                "browser has closed", "connection closed",
+                "remote endpoint closed", "websocket is closed",
+            )
+        )
+
+    async def _reset_browser(self) -> None:
+        """Drop the dead browser reference so the next _ensure_browser()
+        relaunches Chrome from scratch. Caller already holds the lock or
+        is OK racing for it."""
+        async with self._lock:
+            if self._browser is not None:
+                try:
+                    self._browser.stop()
+                except Exception as exc:
+                    log.warning("browser_pool.reset_stop_failed", error=str(exc))
+                self._browser = None
+                log.info("browser_pool.reset")
+
     @asynccontextmanager
     async def acquire(self, source: str) -> AsyncIterator[Any]:
-        """Yield a fresh nodriver Tab with STEALTH_INIT already injected."""
+        """Yield a fresh nodriver Tab with STEALTH_INIT already injected.
+        If the underlying browser is dead (user closed the Chrome window,
+        process crashed, CDP websocket dropped), tear it down and
+        relaunch once."""
         async with self._sem:
             browser = await self._ensure_browser()
-            tab = await browser.get("about:blank", new_tab=True)
+            tab = None
             try:
-                # Inject the stealth patches BEFORE any navigation. This
-                # uses Page.addScriptToEvaluateOnNewDocument under the hood,
-                # so the patches persist across SPA route changes.
+                tab = await browser.get("about:blank", new_tab=True)
+            except BaseException as exc:
+                if self._is_dead_browser_error(exc):
+                    log.warning(
+                        "browser_pool.dead_browser_detected",
+                        error=repr(exc), source=source,
+                    )
+                    await self._reset_browser()
+                    browser = await self._ensure_browser()
+                    tab = await browser.get("about:blank", new_tab=True)
+                else:
+                    raise
+            try:
                 try:
                     await tab.evaluate(STEALTH_INIT, await_promise=False)
-                except Exception as exc:    # never fatal — log and continue
+                except Exception as exc:
                     log.warning("browser_pool.stealth_init_failed", error=str(exc))
                 log.debug("browser_pool.tab_acquired", source=source)
                 yield tab
             finally:
                 try:
                     await tab.close()
-                except Exception as exc:    # cleanup must not raise
+                except Exception as exc:
                     log.warning("browser_pool.tab_close_failed", error=str(exc))
 
     async def aclose(self) -> None:
@@ -211,10 +254,16 @@ class BrowserPool:
             if self._browser is None:
                 return
             try:
-                self._browser.stop()    # nodriver: stop() is synchronous
-            except Exception as exc:    # best-effort stop
+                self._browser.stop()
+            except Exception as exc:
                 log.warning("browser_pool.stop_failed", error=str(exc))
             self._browser = None
+
+    @property
+    def browser(self) -> Any | None:
+        """Direct access for callers that need browser-level APIs
+        (cookies.get_all etc.). Returns None when not initialised."""
+        return self._browser
 
 
 _pool_singleton: BrowserPool | None = None

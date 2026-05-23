@@ -11,6 +11,7 @@ export interface ProductReview {
   author: string | null;
   score: number | null;
   text: string;
+  published_at?: string | null;
 }
 
 export interface ProductOffer {

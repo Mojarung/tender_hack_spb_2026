@@ -3,12 +3,58 @@
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowUpRight, ChevronLeft, ChevronRight, Star, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { proxyImage } from "@/lib/api";
 import { formatPrice } from "@/lib/format";
-import { SOURCE_LABEL, type ProductOffer } from "@/lib/types";
+import { SOURCE_LABEL, type ProductOffer, type ProductReview } from "@/lib/types";
+
+type ReviewSort = "newest" | "oldest" | "rating_desc" | "rating_asc";
+
+const SORT_LABEL: Record<ReviewSort, string> = {
+  newest: "Сначала новые",
+  oldest: "Сначала старые",
+  rating_desc: "Высокий рейтинг",
+  rating_asc: "Низкий рейтинг",
+};
+
+/** Best-effort timestamp parser — accepts epoch sec/ms, ISO, or human RU.
+ *  Returns NaN for unparseable strings so callers can fall back to a stable order. */
+function reviewTimestamp(raw: string | null | undefined): number {
+  if (!raw) return Number.NaN;
+  const asNum = Number(raw);
+  if (Number.isFinite(asNum) && asNum > 1e9) {
+    return asNum < 1e12 ? asNum * 1000 : asNum;
+  }
+  return Date.parse(raw);
+}
+
+function sortReviews(list: ProductReview[], by: ReviewSort): ProductReview[] {
+  // Always work on a copy — `list` is frozen Pydantic-derived data.
+  const copy = list.slice();
+  // Stable order via a tiebreaker on the original index so ties don't flicker.
+  const indexed = copy.map((r, i) => ({ r, i }));
+  indexed.sort((a, b) => {
+    let cmp = 0;
+    if (by === "newest" || by === "oldest") {
+      const ta = reviewTimestamp(a.r.published_at);
+      const tb = reviewTimestamp(b.r.published_at);
+      // NaN goes last regardless of direction
+      const aNan = Number.isNaN(ta);
+      const bNan = Number.isNaN(tb);
+      if (aNan && !bNan) return 1;
+      if (!aNan && bNan) return -1;
+      if (!aNan && !bNan) cmp = by === "newest" ? tb - ta : ta - tb;
+    } else {
+      const sa = a.r.score ?? -1;
+      const sb = b.r.score ?? -1;
+      cmp = by === "rating_desc" ? sb - sa : sa - sb;
+    }
+    return cmp !== 0 ? cmp : a.i - b.i;
+  });
+  return indexed.map(({ r }) => r);
+}
 
 const sourceClass: Record<string, string> = {
   wb: "source-dot-wb",
@@ -16,6 +62,25 @@ const sourceClass: Record<string, string> = {
   ya_market: "source-dot-ya_market",
   runet: "source-dot-runet",
 };
+
+const RU_DATE = new Intl.DateTimeFormat("ru-RU", {
+  day: "numeric", month: "long", year: "numeric",
+});
+
+/** Render Ozon's published_at — accepts ISO, "DD.MM.YYYY", or raw text */
+function formatReviewDate(raw: string): string {
+  // Try epoch (sec or ms)
+  const asNum = Number(raw);
+  if (Number.isFinite(asNum) && asNum > 1e9) {
+    const ms = asNum < 1e12 ? asNum * 1000 : asNum;
+    return RU_DATE.format(new Date(ms));
+  }
+  // Try Date.parse for ISO
+  const ts = Date.parse(raw);
+  if (!Number.isNaN(ts)) return RU_DATE.format(new Date(ts));
+  // Already human-readable (e.g. "12 мая 2025")
+  return raw;
+}
 
 interface Props {
   offer: ProductOffer | null;
@@ -25,11 +90,15 @@ interface Props {
 export function ProductDetailModal({ offer, onClose }: Props) {
   const [activeImage, setActiveImage] = useState(0);
   const [mounted, setMounted] = useState(false);
+  const [reviewSort, setReviewSort] = useState<ReviewSort>("newest");
 
   useEffect(() => setMounted(true), []);
 
-  // Reset gallery position whenever a new product opens.
-  useEffect(() => setActiveImage(0), [offer?.url]);
+  // Reset gallery position + sort whenever a new product opens.
+  useEffect(() => {
+    setActiveImage(0);
+    setReviewSort("newest");
+  }, [offer?.url]);
 
   // Esc closes; lock body scroll while open.
   useEffect(() => {
@@ -49,6 +118,14 @@ export function ProductDetailModal({ offer, onClose }: Props) {
     };
   }, [offer, onClose]);
 
+  // ALL hooks must run on every render in the same order (Rules of Hooks),
+  // so compute these before the `!mounted` early-return below.
+  const reviews = offer?.reviews ?? [];
+  const sortedReviews = useMemo(
+    () => sortReviews(reviews, reviewSort),
+    [reviews, reviewSort],
+  );
+
   if (!mounted) return null;
 
   // `images` may be empty — fall back to single `image` so the modal
@@ -63,7 +140,6 @@ export function ProductDetailModal({ offer, onClose }: Props) {
 
   const rating =
     (offer?.rating ?? Number(offer?.characteristics?.rating ?? 0)) || 0;
-  const reviews = offer?.reviews ?? [];
   const chars = Object.entries(offer?.characteristics ?? {}).filter(
     ([k]) => !["rating", "feedbacks", "reviews", "seller"].includes(k),
   );
@@ -228,26 +304,45 @@ export function ProductDetailModal({ offer, onClose }: Props) {
 
                 {/* Reviews */}
                 <section>
-                  <h3 className="text-sm font-semibold text-[var(--color-ink-2)] mb-2">
-                    Отзывы {reviews.length > 0 && (
-                      <span className="text-[var(--color-ink-4)] font-normal">
-                        ({reviews.length})
-                      </span>
+                  <div className="flex items-center justify-between gap-3 mb-2">
+                    <h3 className="text-sm font-semibold text-[var(--color-ink-2)]">
+                      Отзывы {reviews.length > 0 && (
+                        <span className="text-[var(--color-ink-4)] font-normal">
+                          ({reviews.length})
+                        </span>
+                      )}
+                    </h3>
+                    {reviews.length > 1 && (
+                      <select
+                        value={reviewSort}
+                        onChange={(e) => setReviewSort(e.target.value as ReviewSort)}
+                        aria-label="Сортировка отзывов"
+                        className="text-xs px-2 py-1 rounded-md bg-[var(--color-surface-2)] text-[var(--color-ink-2)] border border-[var(--color-border)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent-100)]"
+                      >
+                        {(Object.keys(SORT_LABEL) as ReviewSort[]).map((k) => (
+                          <option key={k} value={k}>{SORT_LABEL[k]}</option>
+                        ))}
+                      </select>
                     )}
-                  </h3>
+                  </div>
                   {reviews.length > 0 ? (
-                    <ul className="flex flex-col gap-3">
-                      {reviews.map((r, i) => (
+                    <ul className="flex flex-col gap-3 max-h-[420px] overflow-y-auto pr-1">
+                      {sortedReviews.map((r, i) => (
                         <li
                           key={i}
                           className="p-3 rounded-lg bg-[var(--color-surface-2)]"
                         >
                           <div className="flex items-center justify-between text-xs text-[var(--color-ink-4)] mb-1.5">
-                            <span className="font-medium text-[var(--color-ink-2)]">
+                            <span className="font-medium text-[var(--color-ink-2)] truncate">
                               {r.author || "Аноним"}
+                              {r.published_at && (
+                                <span className="ml-2 font-normal text-[var(--color-ink-4)]">
+                                  · {formatReviewDate(r.published_at)}
+                                </span>
+                              )}
                             </span>
                             {r.score != null && (
-                              <span className="inline-flex items-center gap-1">
+                              <span className="inline-flex items-center gap-1 shrink-0">
                                 <Star className="w-3 h-3 fill-[var(--color-warn)] stroke-[var(--color-warn)]" />
                                 {r.score}
                               </span>

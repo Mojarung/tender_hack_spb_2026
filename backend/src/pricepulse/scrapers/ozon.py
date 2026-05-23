@@ -72,11 +72,31 @@ _HEADERS = {
     "Sec-Fetch-Dest": "empty",
 }
 
-# Reviews per offer (kept low — full pages are 10-20 reviews each and
-# the orchestrator's response budget is tight).
-_REVIEWS_PER_OFFER = 3
-# Chars per offer — capped because some PDPs return >100.
-_CHARS_PER_OFFER = 30
+# Reviews per offer — bumped from 3 to 10 so the modal carousel has
+# a meaningful sample. Sorted newest-first via the API param below.
+_REVIEWS_PER_OFFER = 10
+# Chars per offer — bumped from 30 to 120 since the full Ozon spec
+# page has 40-80 attributes for laptops/electronics and the user
+# wants the modal to show the FULL list with its own scrollbar.
+_CHARS_PER_OFFER = 120
+
+# Full-characteristics layout containers, tried in order. The widget
+# walker is forgiving — anything returned with chars merges into the
+# short-list (deduped on name). When we hit the actual full-spec
+# container Ozon returns ~80 attribute rows in one response.
+_FULL_CHARS_CONTAINERS = (
+    "characteristicsList",
+    "webProductCharacteristics",
+    "webShortCharacteristics",
+    "pdpAtomicCharacteristics",
+)
+
+# Reviews API params — `sort=published_at_desc` returns the freshest
+# reviews first (Ozon's own default for the page when you click
+# "Сначала новые"). `limit=20` over-fetches so the dedupe + min-30-char
+# filter still leaves us with ≥10 quality entries.
+_REVIEWS_SORT = "published_at_desc"
+_REVIEWS_PAGE_LIMIT = 20
 
 
 # ---------------------------------------------------------------------------
@@ -408,18 +428,35 @@ class OzonScraper:
         stub: dict[str, Any],
     ) -> dict[str, Any]:
         base_path = urlparse(stub["url"]).path.rstrip("/")
+        # 1) Main PDP — backfill + short chars.
         pdp_body, _ = await _get_json(session, f"{base_path}/")
+        chars: dict[str, str] = {}
         if pdp_body:
             ws = pdp_body.get("widgetStates") or {}
             backfill_from_pdp(stub, ws)
-            stub["characteristics"] = dict(chars_via_structural(ws)[:self._chars_per_offer])
-        else:
-            stub.setdefault("characteristics", {})
+            chars.update(chars_via_structural(ws))
 
+        # 2) Full characteristics — separate composer-API container.
+        for container in _FULL_CHARS_CONTAINERS:
+            full_body, _ = await _get_json(
+                session,
+                f"{base_path}/?layout_container={container}&layout_page_index=2",
+            )
+            if not full_body:
+                continue
+            ws = full_body.get("widgetStates") or {}
+            for name, value in chars_via_structural(ws):
+                chars.setdefault(name, value)
+            if len(chars) >= self._chars_per_offer:
+                break
+        stub["characteristics"] = dict(list(chars.items())[:self._chars_per_offer])
+
+        # 3) Reviews — newest first, over-fetch for dedupe.
         rev_body, _ = await _get_json(
             session,
             f"{base_path}/reviews/?layout_container=reviewshelfpaginator"
-            f"&layout_page_index=2&page=1",
+            f"&layout_page_index=2&page=1"
+            f"&sort={_REVIEWS_SORT}&limit={_REVIEWS_PAGE_LIMIT}",
         )
         if rev_body:
             stub["reviews"] = extract_reviews(
@@ -433,20 +470,52 @@ class OzonScraper:
         self,
         stub: dict[str, Any],
     ) -> dict[str, Any]:
-        """Last-resort enrichment via warmed browser. Slow (~3 sec per
-        PDP) — only used when L1 returns a stub with no name/price."""
+        """Last-resort enrichment via warmed browser. Three parallel
+        fetches per offer: main PDP (name/price/image + short chars),
+        full-spec container (more chars), reviews (newest first).
+        BrowserPool's semaphore bounds total concurrency so 5 offers
+        × 3 fetches don't open 15 tabs at once — they queue."""
         base_path = urlparse(stub["url"]).path.rstrip("/")
-        pdp_body = await fetch_ozon_via_browser(f"{base_path}/")
-        if pdp_body:
+        pdp_coro = fetch_ozon_via_browser(f"{base_path}/")
+        # Single full-chars probe — most stable container per research.
+        # Falling through every entry in _FULL_CHARS_CONTAINERS would
+        # multiply browser navigations 4×; one is enough here.
+        full_chars_coro = fetch_ozon_via_browser(
+            f"{base_path}/?layout_container=characteristicsList&layout_page_index=2",
+        )
+        rev_coro = fetch_ozon_via_browser(
+            f"{base_path}/reviews/?layout_container=reviewshelfpaginator"
+            f"&layout_page_index=2&page=1"
+            f"&sort={_REVIEWS_SORT}&limit={_REVIEWS_PAGE_LIMIT}",
+        )
+        pdp_body, full_body, rev_body = await asyncio.gather(
+            pdp_coro, full_chars_coro, rev_coro, return_exceptions=True,
+        )
+
+        chars: dict[str, str] = {}
+        if isinstance(pdp_body, dict):
             ws = pdp_body.get("widgetStates") or {}
             backfill_from_pdp(stub, ws)
-            stub["characteristics"] = dict(chars_via_structural(ws)[:self._chars_per_offer])
+            for name, value in chars_via_structural(ws):
+                chars.setdefault(name, value)
         else:
-            stub.setdefault("characteristics", {})
-        # Skip reviews on the browser path — saves another browser nav
-        # per offer; reviews stay [] which the frontend renders as
-        # "Отзывов пока нет." in the modal.
-        stub.setdefault("reviews", [])
+            if isinstance(pdp_body, BaseException):
+                log.debug("ozon.enrich.browser_pdp_failed", error=repr(pdp_body))
+        if isinstance(full_body, dict):
+            ws_full = full_body.get("widgetStates") or {}
+            for name, value in chars_via_structural(ws_full):
+                chars.setdefault(name, value)
+        stub["characteristics"] = dict(list(chars.items())[:self._chars_per_offer])
+
+        if isinstance(rev_body, dict):
+            stub["reviews"] = extract_reviews(
+                rev_body.get("widgetStates") or {}, limit=self._reviews_per_offer,
+            )
+        else:
+            stub.setdefault("reviews", [])
+            if isinstance(rev_body, BaseException):
+                log.debug("ozon.enrich.browser_reviews_failed", error=repr(rev_body))
+
         return stub
 
     # -- Stub → ProductOffer --------------------------------------------------

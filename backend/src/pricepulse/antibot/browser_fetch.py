@@ -232,27 +232,103 @@ def backfill_from_pdp(offer: dict[str, Any], widget_states: dict[str, Any]) -> N
                     break
 
 
+_REVIEW_CTA_TEXTS = {
+    "перейти", "купить", "в корзину", "в корзине", "добавить", "оформить",
+    "подписаться", "смотреть", "подробнее", "написать отзыв", "все отзывы",
+    "оплатить", "выбрать", "сортировка", "фильтр",
+}
+
+# Only payloads from these widgets count as reviews. The reviews-API
+# composer body lands them under `webListReviews-*` / `webReviewList-*`;
+# nothing else. Anything else is navigation chrome with stray `text:`
+# fields that look review-shaped to a generic walker.
+_REVIEW_WIDGET_PREFIXES = (
+    "weblistreviews", "webreviewlist", "weblistreviewsv2",
+    "reviewshelfpaginator", "weblistcomments",
+)
+
+
 def extract_reviews(widget_states: dict[str, Any], limit: int = 5) -> list[dict[str, Any]]:
-    """Pull review {author, score, text} triples out of a reviews-API body."""
+    """Pull review {author, score, text, date} dicts out of a reviews-API
+    body. STRICT widget allow-list — pre-2026 versions were walking
+    every widget with "review" in its key and matching CTA buttons
+    inside `webProductMainWidget` as reviews ("Аноним: Перейти")."""
     out: list[dict[str, Any]] = []
+    seen: set[tuple[str | None, str]] = set()
 
     def _maybe_review(item: Any) -> dict[str, Any] | None:
         if not isinstance(item, dict):
             return None
-        text = (
-            item.get("text") or item.get("comment") or item.get("body")
-            or (
-                (item.get("review") or {}).get("text")
-                if isinstance(item.get("review"), dict) else None
-            )
-        )
+        # Ozon's 2026 review item shape: {content: {comment: {text}}}
+        # or {text} or {comment} — try the common paths.
+        text: str | None = None
+        for path in (
+            ("text",),
+            ("comment",),
+            ("body",),
+            ("content", "comment", "text"),
+            ("content", "comment"),
+            ("review", "text"),
+        ):
+            cur: Any = item
+            for k in path:
+                if not isinstance(cur, dict):
+                    cur = None
+                    break
+                cur = cur.get(k)
+            if isinstance(cur, str) and cur.strip():
+                text = cur
+                break
+            if isinstance(cur, dict):
+                t = textrs_to_str(cur)
+                if t:
+                    text = t
+                    break
         if not text:
             return None
-        author = item.get("author") or item.get("authorName") or item.get("userName")
+        text = text.strip()
+        # Reject CTA labels and one-word "reviews" that come from UI chrome.
+        if text.lower() in _REVIEW_CTA_TEXTS or len(text) < 30:
+            return None
+
+        author = (
+            item.get("author") or item.get("authorName")
+            or item.get("userName") or ((item.get("user") or {}).get("name"))
+        )
         if isinstance(author, dict):
             author = author.get("name") or author.get("title")
-        score = item.get("score") or item.get("rating") or item.get("itemRating")
-        return {"author": author, "score": score, "text": str(text)[:600]}
+        if isinstance(author, str):
+            author = author.strip() or None
+
+        score = (
+            item.get("score") or item.get("rating") or item.get("itemRating")
+            or ((item.get("content") or {}).get("score")
+                if isinstance(item.get("content"), dict) else None)
+        )
+        try:
+            score = int(score) if score is not None else None
+        except (TypeError, ValueError):
+            score = None
+
+        published = (
+            item.get("publishedAt") or item.get("createdAt")
+            or item.get("date") or item.get("publicationDate")
+            or ((item.get("content") or {}).get("publishedAt")
+                if isinstance(item.get("content"), dict) else None)
+        )
+        if isinstance(published, dict):
+            published = textrs_to_str(published)
+
+        key = (author, text[:120])
+        if key in seen:
+            return None
+        seen.add(key)
+        return {
+            "author": author,
+            "score": score,
+            "text": text[:1000],
+            "published_at": str(published) if published else None,
+        }
 
     def _walk(node: Any) -> None:
         if len(out) >= limit:
@@ -269,18 +345,19 @@ def extract_reviews(widget_states: dict[str, Any], limit: int = 5) -> list[dict[
             for v in node:
                 _walk(v)
 
-    for v in widget_states.values():
+    for k, v in widget_states.items():
+        if len(out) >= limit:
+            break
         if not isinstance(v, str):
             continue
-        if "review" not in v[:200].lower() and "feedback" not in v[:200].lower():
+        kl = k.lower()
+        if not any(kl.startswith(p) for p in _REVIEW_WIDGET_PREFIXES):
             continue
         try:
             payload = orjson.loads(v)
         except orjson.JSONDecodeError:
             continue
         _walk(payload)
-        if len(out) >= limit:
-            break
     return out[:limit]
 
 
@@ -342,7 +419,9 @@ class OzonCookieWarmer:
 
     async def _warm(self) -> list[dict[str, Any]]:
         """Drive the stealth browser through ozon.ru + a search page so
-        Ozon plants `abt_data` and the security tokens, then export."""
+        Ozon plants `abt_data` and the security tokens, then export.
+        Auto-recovers if the user closed the browser between requests
+        (pool detects the dead websocket and relaunches Chrome)."""
         pool = await get_browser_pool()
         async with pool.acquire("ozon") as tab:
             log.info("ozon.cookies.warming")
@@ -355,11 +434,23 @@ class OzonCookieWarmer:
                 await asyncio.sleep(1.5)
             except Exception as exc:
                 log.warning("ozon.cookies.warm_nav_failed", error=str(exc))
-            # Export
+            # Export — `pool.browser` accessor instead of the private
+            # `_browser` attr we used to reach for. If the browser died
+            # between the navigation and here, the pool will already
+            # have reset it on the next acquire(), but for this call we
+            # gracefully return an empty list and let the caller retry.
+            browser = pool.browser
+            if browser is None:
+                log.warning("ozon.cookies.no_browser_after_warm")
+                return []
             try:
-                raw = await pool._browser.cookies.get_all()    # type: ignore[union-attr]
+                raw = await browser.cookies.get_all()
             except Exception as exc:
-                log.warning("ozon.cookies.export_failed", error=str(exc))
+                if pool._is_dead_browser_error(exc):
+                    log.warning("ozon.cookies.browser_died_during_export")
+                    await pool._reset_browser()
+                else:
+                    log.warning("ozon.cookies.export_failed", error=str(exc))
                 return []
             out: list[dict[str, Any]] = []
             for c in raw:
@@ -423,22 +514,37 @@ async def get_ozon_cookie_warmer() -> OzonCookieWarmer:
 # ---------------------------------------------------------------------------
 # Same-origin composer-api fetch (used as L2 fallback when L1 keeps 403-ing)
 # ---------------------------------------------------------------------------
+def _page_url_for(sub_path: str) -> str:
+    """The user-facing page the browser should navigate to before the
+    same-origin composer-api fetch. We strip composer-only query
+    params (`layout_container`, `layout_page_index`) because they make
+    the real page render an empty shell — only the API consumes them."""
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+    parts = urlsplit(sub_path)
+    kept = [
+        (k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
+        if k not in {"layout_container", "layout_page_index"}
+    ]
+    clean = urlunsplit(("", "", parts.path, urlencode(kept), parts.fragment))
+    return _OZON_HOME.rstrip("/") + (clean if clean.startswith("/") else "/" + clean)
+
+
 async def fetch_ozon_via_browser(sub_path: str) -> dict[str, Any] | None:
     """Issue a composer-api fetch from inside the warmed browser page —
     carries warmed cookies, bypasses any L1-blocked TLS path. ``sub_path``
     is what you'd put after ``?url=`` (e.g. ``/search/?text=…``).
 
-    Behaviour-critical: we navigate the tab to the *same path* as a
-    real page first (so the search URL appears in the page's history,
-    cookies, and Ozon's anti-bot scoring), THEN do a same-origin fetch
-    for the composer-api version. Navigating only to the home page
-    causes Ozon to silently return widgetStates with no search results
-    — exactly the soft-block we hit in the May-2026 demo."""
+    Behaviour-critical: we navigate the tab to the matching *clean*
+    user-facing page first (so anti-bot sees a normal session, and the
+    page hydrates real cookies/state), THEN same-origin fetch the
+    composer-api with the full sub_path including layout-container
+    params. Navigating with composer-only params in the URL renders
+    an empty shell and the subsequent fetch returns soft-blocked
+    widgetStates."""
     pool = await get_browser_pool()
     composer_url = f"{_COMPOSER_PATH}?url={quote(sub_path, safe='')}"
-    # The browser visits THIS — the actual user-facing page. The same-
-    # origin fetch below reuses that page's session.
-    page_url = _OZON_HOME.rstrip("/") + sub_path
+    page_url = _page_url_for(sub_path)
     js = (
         "(async () => {"
         f"  const r = await fetch({composer_url!r}, "
