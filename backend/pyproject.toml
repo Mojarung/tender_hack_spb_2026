@@ -10,6 +10,7 @@ authors = [{ name = "PricePulse team" }]
 dependencies = [
     # ===== Web framework =====
     "fastapi>=0.128",
+    "python-multipart>=0.0.29",
     "uvicorn[standard]>=0.34",
     "sse-starlette>=2.1",
     # ===== Validation / settings =====

@@ -69,8 +69,14 @@ class Settings(BaseSettings):
 
     # Local LLM via Ollama. Text fallback defaults to a small CPU-friendly model.
     ollama_url: str = "http://ollama:11434"
+    # Direct Ollama Cloud API uses `https://ollama.com` + Bearer token.
+    # Local Ollama (`http://...:11434`) does not need a token.
+    ollama_api_key: str = ""
     ollama_vision_model: str = "gemma4:e4b"
     ollama_text_model: str = "qwen2.5:0.5b"
+
+    image_search_max_bytes: int = 8_000_000
+    image_search_cache_ttl_seconds: int = 24 * 3600
     # Notifications
     ntfy_url: str = "http://ntfy/pricepulse-alerts"
     apprise_url: str = "http://apprise:8000/notify/pricepulse"
