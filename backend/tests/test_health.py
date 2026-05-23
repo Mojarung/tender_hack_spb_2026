@@ -13,7 +13,6 @@ async def test_search_empty_groups(client: AsyncClient) -> None:
     )
     assert response.status_code == 200
     body = response.json()
-    # TEMP — orchestrator/search.py registry is Ozon+WB hybrid only.
-    # Я.Маркет/Рунет return when uncommenting the other scrapers there:
-    # assert {g["source"] for g in body["groups"]} == {"wb", "ozon", "ya_market", "runet"}
-    assert {g["source"] for g in body["groups"]} == {"wb", "ozon"}
+    # Orchestrator/search.py registry: WB + Ozon + Runet (Yandex SERP).
+    # Я.Маркет still commented out — needs a residential RU proxy pool.
+    assert {g["source"] for g in body["groups"]} == {"wb", "ozon", "runet"}

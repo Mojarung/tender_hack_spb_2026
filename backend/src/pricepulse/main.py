@@ -19,6 +19,7 @@ from prometheus_fastapi_instrumentator import Instrumentator, metrics
 
 from pricepulse.antibot.browser_pool import close_browser_pool
 from pricepulse.antibot.wb_browser import close_wb_browser
+from pricepulse.antibot.yandex_browser import close_yandex_browser
 from pricepulse.api.cache import close_rate_limiter, close_search_cache
 from pricepulse.api.routes import (
     chat,
@@ -56,6 +57,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # once at startup (~5-6 s combined) and eliminates the race.
     from pricepulse.antibot.browser_pool import get_browser_pool
     from pricepulse.antibot.wb_browser import get_wb_browser
+    from pricepulse.antibot.yandex_browser import get_yandex_browser
 
     try:
         pool = await get_browser_pool()
@@ -71,6 +73,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         import structlog
         structlog.get_logger(__name__).warning("wb_browser_prewarm_failed", error=repr(exc), exc_info=True)
+    try:
+        yandex = await get_yandex_browser()
+        await yandex._ensure_started()    # type: ignore[attr-defined]
+    except Exception as exc:
+        import structlog
+        structlog.get_logger(__name__).warning("yandex_browser_prewarm_failed", error=repr(exc), exc_info=True)
 
     yield
     # Tear singletons down cleanly on app exit.
@@ -78,6 +86,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await close_rate_limiter()
     await close_browser_pool()
     await close_wb_browser()
+    await close_yandex_browser()
 
 
 def _instrument(app: FastAPI) -> None:
