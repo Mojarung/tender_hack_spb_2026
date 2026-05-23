@@ -1,6 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,6 +14,10 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"  # noqa: S104
     api_port: int = 8000
     api_cors_origins: str = "http://localhost:3000"
+
+    # Base host the browser uses to reach our admin landing page links.
+    # Override per-environment (e.g. https://admin.pricepulse.team in prod).
+    admin_host: str = "http://localhost"
 
     postgres_host: str = "postgres"
     postgres_port: int = 5432
@@ -36,20 +41,16 @@ class Settings(BaseSettings):
     yandex_market_rpm: int = 10
     runet_rpm: int = 30
 
-    twocaptcha_api_key: str = ""
-
-    # L3 fallback — foreign services (free tiers)
-    scrapfly_api_key: str = ""
-    apify_api_token: str = ""
-    zenrows_api_key: str = ""
-    firecrawl_api_key: str = ""
-
-    firecrawl_url: str = "http://firecrawl-api:3002"
+    # 4th source — self-hosted SearXNG (URL discovery only; parsing is on us).
+    # The methodology (final_presa.pdf p.5) bans external scraping APIs and
+    # search-engine APIs, so the previous Firecrawl-cloud / Scrapfly / Apify /
+    # ZenRows / Gemini / DeepSeek keys are gone wholesale.
     searxng_url: str = "http://searxng:8080"
 
-    # LLM extraction for the 4th source
-    gemini_api_key: str = ""
-    deepseek_api_key: str = ""
+    # Spell-correction microservice — SAGE FRED-T5 distilled-95M (Sber)
+    # at backend/spellcheck/. Empty disables it; normalize_query then runs
+    # without general-RU spell correction (brand thesaurus + pymorphy3 still work).
+    spellcheck_url: str = ""
 
     # S3 / MinIO — image cache
     s3_endpoint_url: str = "http://minio:9000"
@@ -70,21 +71,10 @@ class Settings(BaseSettings):
     pgadmin_password: str = "hackathon"
     glitchtip_secret_key: str = ""
 
-    # ===== Feature flags (free-mode by default) =====
-    # Global killswitch. If false, no paid branch is ever taken.
-    features_allow_paid: bool = False
-    # Granular flags — only effective when allow_paid is true.
-    feature_use_paid_proxies: bool = False
-    feature_use_2captcha: bool = False
-    feature_use_paid_llm: bool = False
-    feature_use_paid_l3: bool = False
-
-    # Demo mode — pre-warm Redis cache for jury-known queries so live demo
-    # is sub-100ms with no risk of bans.
+    # Demo mode — pre-warm Redis cache for jury-known queries so the live
+    # demo answers in <100 ms. Paid feature flags / cost-guard are gone —
+    # nothing in the project hits a paid third-party service any more.
     demo_mode: bool = False
-
-    # Cost guard (USD hard-cap for 24h of L3 + L4). $0 in free-mode.
-    cost_cap_usd: int = 0
 
     # ===== Auth =====
     # JWT signing key — MUST be set in production. Empty default lets dev work,
@@ -96,6 +86,17 @@ class Settings(BaseSettings):
     # Override Postgres entirely with a SQLite DSN when set — useful for
     # `uv run uvicorn ...` without a running Postgres container.
     sqlite_url: str = ""    # e.g. "sqlite+aiosqlite:///./pricepulse.db"
+
+    @model_validator(mode="after")
+    def _prod_must_override_secrets(self) -> "Settings":
+        # Hackathon defense runs APP_ENV=local — this only bites in real deployments,
+        # where shipping with the dev JWT secret would let anyone mint admin tokens.
+        if self.app_env == "prod" and self.auth_jwt_secret.startswith("dev-only"):
+            raise ValueError(
+                "AUTH_JWT_SECRET is at its dev default in APP_ENV=prod — "
+                "generate one with `openssl rand -hex 32` and set it in env."
+            )
+        return self
 
     @property
     def database_url(self) -> str:

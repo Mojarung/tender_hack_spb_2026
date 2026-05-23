@@ -87,4 +87,4 @@ def correct_phrase(text: str) -> tuple[str, list[tuple[str, str]]]:
     return " ".join(out), fixes
 
 
-__all__ = ["correct_token", "correct_phrase"]
+__all__ = ["correct_phrase", "correct_token"]

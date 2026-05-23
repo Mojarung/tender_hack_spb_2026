@@ -87,6 +87,7 @@ class SourceGroup(BaseModel):
     source: SourceKind
     count: int
     min_price: Decimal | None
+    avg_price: Decimal | None = None
     median_price: Decimal | None = None
     currency: str = "RUB"
     offers: list[ProductOffer]
@@ -98,13 +99,18 @@ class NormalizedQuery(BaseModel):
     normalized: str
     expansions: list[str] = Field(default_factory=list)
     attributes: ProductAttributes | None = None
+    alternates: list[str] = Field(default_factory=list)
 
 
 class SearchRequest(BaseModel):
     query: str
     max_per_source: int = Field(default=10, ge=1, le=50)
     sources: list[SourceKind] | None = None
-    city: str | None = Field(default=None, max_length=120)
+    region_id: int = Field(
+        default=213,
+        ge=1,
+        description="Yandex Market lr region id. Default 213 is Moscow.",
+    )
     nofix: bool = Field(
         default=False,
         description="Skip typo correction and RU→EN translit — search the raw cleaned text.",

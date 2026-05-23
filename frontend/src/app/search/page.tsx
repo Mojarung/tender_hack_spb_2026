@@ -9,7 +9,23 @@ import { Suspense, type FormEvent, useEffect, useRef, useState } from "react";
 import { ProductCard } from "@/components/ProductCard";
 import { GridSkeleton } from "@/components/Skeleton";
 import { api } from "@/lib/api";
-import { SOURCE_LABEL, type SearchResponse, type Source } from "@/lib/types";
+import { formatPrice } from "@/lib/format";
+import { DEFAULT_REGION_ID, getRegion } from "@/lib/regions";
+import {
+  SOURCE_LABEL, type ProductOffer, type SearchResponse,
+  type Source, type SourceGroup,
+} from "@/lib/types";
+
+const EMPTY_GROUP = (source: Source): SourceGroup => ({
+  source, count: 0, min_price: null, avg_price: null, median_price: null,
+  currency: "RUB", offers: [],
+});
+
+function appendOffer(existing: ProductOffer[], offer: ProductOffer): ProductOffer[] {
+  // Dedup by url — stream may resend on synonym retry.
+  if (existing.some((o) => o.url === offer.url)) return existing;
+  return [...existing, offer];
+}
 
 export const dynamic = "force-dynamic";
 
@@ -19,31 +35,21 @@ function SearchInner() {
   const q = (params.get("q") ?? "").trim();
   const from = (params.get("from") ?? "").trim();    // original user query (after a fix)
   const nofix = params.get("nofix") === "1";
-  const city = (params.get("city") ?? "").trim();
+  const regionId = Number(params.get("region_id") ?? DEFAULT_REGION_ID);
+  const region = getRegion(regionId);
   const [data, setData] = useState<SearchResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<Source | "all">("all");
-  const [cityDraft, setCityDraft] = useState(city);
 
   /** When we replace the URL to the corrected query, the effect re-fires
    *  for the new `q`. The next run reuses the data already in state and
    *  just clears the loading flag — no duplicate request. */
   const skipNextFetch = useRef(false);
 
-  useEffect(() => {
-    setCityDraft(city);
-  }, [city]);
-
-  function applyCity(e: FormEvent) {
+  function applyRegion(e: FormEvent) {
     e.preventDefault();
-    const sp = new URLSearchParams();
-    sp.set("q", q);
-    if (from) sp.set("from", from);
-    if (nofix) sp.set("nofix", "1");
-    const nextCity = cityDraft.trim();
-    if (nextCity) sp.set("city", nextCity);
-    router.replace(`/search?${sp.toString()}`);
+    router.replace(`/search?q=${encodeURIComponent(q)}&region_id=${region.id}`);
   }
 
   useEffect(() => {
@@ -56,42 +62,101 @@ function SearchInner() {
     }
 
     let cancelled = false;
-    setData(null); setErr(null); setLoading(true);
+    setData({
+      query: { raw: q, normalized: q, expansions: [] },
+      groups: [], top_deals: [], took_ms: 0, partial: true,
+    });
+    setErr(null); setLoading(true);
 
     // `from` present ⇒ we're already showing the canonical query.
     const useNofix = nofix || !!from;
 
-    api.search(q, 16, { nofix: useNofix, city: city || undefined })
-      .then((r) => {
-        if (cancelled) return;
-        const fixed = r.query.normalized.trim();
-        const willReplace = !useNofix && !!fixed && fixed !== q.toLowerCase();
+    // Capture the corrected query so we can canonicalize the URL after `done`.
+    let normalizedCaptured = "";
 
-        if (willReplace) {
-          // Keep the loader on screen until the URL is rewritten — that's
-          // when the header search box swaps to the corrected query.
-          skipNextFetch.current = true;
-          setData(r);
-          const sp = new URLSearchParams();
-          sp.set("q", fixed);
-          sp.set("from", q);
-          if (city) sp.set("city", city);
-          router.replace(`/search?${sp.toString()}`);
-          // loading stays true; the next effect run flips it.
-        } else {
-          setData(r);
+    const handle = api.searchStream(q, 16, {
+      nofix: useNofix,
+      region_id: region.id,
+      handlers: {
+        onQueryNormalized: (nq) => {
+          if (cancelled) return;
+          normalizedCaptured = nq.normalized.trim();
+          setData((d) => d ? { ...d, query: nq } : d);
+        },
+        onSourceStarted: (e) => {
+          if (cancelled) return;
+          setData((d) => {
+            if (!d) return d;
+            if (d.groups.some((g) => g.source === e.source)) return d;
+            return { ...d, groups: [...d.groups, EMPTY_GROUP(e.source)] };
+          });
+        },
+        onOffer: (e) => {
+          if (cancelled) return;
+          setData((d) => {
+            if (!d) return d;
+            const groups = d.groups.map((g) =>
+              g.source === e.source
+                ? { ...g, offers: appendOffer(g.offers, e.offer), count: g.offers.length + 1 }
+                : g,
+            );
+            return { ...d, groups };
+          });
+        },
+        onSourceFinished: (e) => {
+          if (cancelled) return;
+          setData((d) => {
+            if (!d) return d;
+            const groups = d.groups.map((g) =>
+              g.source === e.source
+                ? {
+                    ...g,
+                    count: e.count,
+                    min_price: e.min_price,
+                    avg_price: e.avg_price,
+                    median_price: e.median_price,
+                    error: e.error ?? undefined,
+                  }
+                : g,
+            );
+            return { ...d, groups };
+          });
+        },
+        onTopDeals: (e) => {
+          if (cancelled) return;
+          setData((d) => d ? { ...d, top_deals: e.top_deals } : d);
+        },
+        onDone: (e) => {
+          if (cancelled) return;
+          const fixed = normalizedCaptured;
+          const willReplace = !useNofix && !!fixed && fixed !== q.toLowerCase();
+          setData((d) => d ? { ...d, took_ms: e.took_ms, partial: false } : d);
+          if (willReplace) {
+            skipNextFetch.current = true;
+            const sp = new URLSearchParams();
+            sp.set("q", fixed);
+            sp.set("from", q);
+            sp.set("region_id", String(region.id));
+            router.replace(`/search?${sp.toString()}`);
+            // loading flips on the next effect run, like the old non-stream flow.
+          } else {
+            setLoading(false);
+          }
+        },
+        onError: (e) => {
+          if (cancelled) return;
+          setErr(e.message);
           setLoading(false);
-        }
-      })
-      .catch((e) => {
-        if (!cancelled) {
-          setErr(String(e?.message ?? e));
-          setLoading(false);
-        }
-      });
-    return () => { cancelled = true; };
+        },
+      },
+    });
+
+    return () => {
+      cancelled = true;
+      handle.close();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, nofix, city]);
+  }, [q, nofix, region.id]);
 
   if (!q) {
     return (
@@ -107,6 +172,8 @@ function SearchInner() {
   const all = data?.groups?.flatMap((g) => g.offers) ?? [];
   const offers = filter === "all" ? all : all.filter((o) => o.source === filter);
   const empty = !loading && all.length === 0;
+  const sourceErrors = data?.groups?.filter((g) => g.error) ?? [];
+  const allSourcesFailed = !loading && !!data?.groups?.length && sourceErrors.length === data.groups.length;
 
   return (
     <div className="flex flex-col lg:flex-row gap-6">
@@ -118,28 +185,21 @@ function SearchInner() {
             {data?.groups?.map((g) => (
               <Pill key={g.source} checked={filter === g.source}
                 onClick={() => setFilter(g.source)}
-                label={SOURCE_LABEL[g.source]} count={g.count} error={g.error} />
+                label={SOURCE_LABEL[g.source]} count={g.count} error={g.error}
+                group={g} currency={g.currency} />
             ))}
           </ul>
 
-          <form onSubmit={applyCity} className="mt-6 pt-4 border-t border-[var(--color-line)]">
+          <form onSubmit={applyRegion} className="mt-6 pt-4 border-t border-[var(--color-line)]">
             <label className="text-xs uppercase tracking-wider text-[var(--color-ink-4)] font-medium flex items-center gap-1.5 mb-2">
               <MapPin className="w-3 h-3" />
-              Город доставки
+              Регион поиска
             </label>
-            <div className="flex gap-2">
-              <input
-                value={cityDraft}
-                onChange={(e) => setCityDraft(e.target.value)}
-                placeholder="Москва"
-                className="min-w-0 flex-1 rounded-lg border border-[var(--color-line)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
-              />
-              <button type="submit" className="btn btn-primary !px-3 !py-2 text-xs">
-                OK
-              </button>
-            </div>
+            <button type="submit" className="btn btn-primary !px-3 !py-2 text-xs">
+              {region.name}
+            </button>
             <p className="mt-2 text-[11px] text-[var(--color-ink-4)]">
-              Для WB используем региональный dest и ETA склада.
+              Регион сейчас применяется к Я.Маркету через lr/yandex_gid.
             </p>
           </form>
 
@@ -214,8 +274,15 @@ function SearchInner() {
         <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35 }}>
           <h1 className="text-2xl font-semibold tracking-tight">Результаты по «{q}»</h1>
           <p className="text-sm text-[var(--color-ink-4)] mt-1">
-            {loading ? "Идёт поиск…" : `Найдено ${all.length} предложений`}
+            {loading
+              ? `Идёт поиск по региону: ${region.name}…`
+              : `Найдено ${all.length} предложений · ${region.name}`}
           </p>
+          {region.id !== DEFAULT_REGION_ID && !loading && (
+            <p className="text-[11px] text-[var(--color-ink-4)] mt-1 italic">
+              регион применяется к Я.Маркету; WB / Ozon / Рунет показывают общий каталог
+            </p>
+          )}
 
           {/* tiny inline hint — replaces the old banner card */}
           {from && !nofix && (
@@ -226,7 +293,7 @@ function SearchInner() {
               <CornerDownLeft className="inline w-3 h-3 mr-1 -mt-0.5" />
               исправлено из «{from}» ·{" "}
               <Link
-                href={`/search?${searchLinkParams(from, { nofix: true, city }).toString()}`}
+                href={`/search?q=${encodeURIComponent(from)}&nofix=1&region_id=${region.id}`}
                 className="text-[var(--color-accent)] hover:underline"
               >
                 искать как написал
@@ -240,7 +307,7 @@ function SearchInner() {
             >
               без исправлений ·{" "}
               <Link
-                href={`/search?${searchLinkParams(q, { city }).toString()}`}
+                href={`/search?q=${encodeURIComponent(q)}&region_id=${region.id}`}
                 className="text-[var(--color-accent)] hover:underline"
               >
                 включить
@@ -255,16 +322,31 @@ function SearchInner() {
           </div>
         )}
 
-        {loading ? (
+        {allSourcesFailed && (
+          <div className="mt-4 p-3 rounded-xl bg-amber-50 text-amber-900 text-sm border border-amber-200">
+            Все источники вернули ошибку, поэтому это не похоже на честный пустой результат.
+            Проверьте backend-логи или наведите на значки ⚠ в фильтре источников.
+          </div>
+        )}
+
+        {loading && offers.length === 0 ? (
           <div className="mt-6"><GridSkeleton count={6} /></div>
         ) : empty ? (
           <EmptyState query={q} />
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 mt-6">
-            {offers.map((o, i) => (
-              <ProductCard key={`${o.source}-${o.name}-${i}`} offer={o} index={i} />
-            ))}
-          </div>
+          <>
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 mt-6">
+              {offers.map((o, i) => (
+                <ProductCard key={`${o.source}-${o.url}-${i}`} offer={o} index={i} />
+              ))}
+            </div>
+            {loading && (
+              <div className="mt-6 text-xs text-[var(--color-ink-4)] flex items-center gap-2">
+                <span className="inline-block w-2 h-2 rounded-full bg-[var(--color-accent)] animate-pulse" />
+                ищем в остальных источниках…
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
@@ -318,35 +400,44 @@ function EmptyState({ query }: { query: string }) {
   );
 }
 
-function searchLinkParams(
-  query: string,
-  opts: { nofix?: boolean; city?: string },
-) {
-  const sp = new URLSearchParams();
-  sp.set("q", query);
-  if (opts.nofix) sp.set("nofix", "1");
-  if (opts.city) sp.set("city", opts.city);
-  return sp;
-}
-
 function Pill({
-  checked, onClick, label, count, error,
-}: { checked: boolean; onClick: () => void; label: string; count: number; error?: string | null }) {
+  checked, onClick, label, count, error, group, currency,
+}: {
+  checked: boolean; onClick: () => void; label: string; count: number;
+  error?: string | null; group?: SourceGroup; currency?: string;
+}) {
+  const stats = group && count > 0 ? formatGroupStats(group, currency) : null;
+  const subColor = checked ? "text-white/70" : "text-[var(--color-ink-4)]";
   return (
     <li>
       <button
         onClick={onClick}
+        title={error ?? undefined}
         className={
-          "w-full flex items-center justify-between gap-3 px-3 py-2 rounded-lg text-left transition-colors " +
+          "w-full flex flex-col gap-0.5 px-3 py-2 rounded-lg text-left transition-colors " +
           (checked ? "bg-[var(--color-ink)] text-white"
                    : "hover:bg-[var(--color-surface-2)] text-[var(--color-ink-2)]")
         }
       >
-        <span>{label}</span>
-        <span className={checked ? "text-white/80 text-xs" : "text-xs text-[var(--color-ink-4)]"}>
-          {error ? "⚠" : count}
+        <span className="flex items-center justify-between gap-3">
+          <span>{label}</span>
+          <span className={checked ? "text-white/80 text-xs" : "text-xs text-[var(--color-ink-4)]"}>
+            {error ? "⚠" : count}
+          </span>
         </span>
+        {stats && (
+          <span className={`text-[11px] tabular-nums ${subColor}`}>{stats}</span>
+        )}
       </button>
     </li>
   );
+}
+
+function formatGroupStats(g: SourceGroup, currency?: string): string | null {
+  const cur = currency ?? g.currency ?? "RUB";
+  const parts: string[] = [];
+  if (g.min_price) parts.push(`от ${formatPrice(g.min_price, cur)}`);
+  if (g.median_price) parts.push(`мед. ${formatPrice(g.median_price, cur)}`);
+  else if (g.avg_price) parts.push(`сред. ${formatPrice(g.avg_price, cur)}`);
+  return parts.length ? parts.join(" · ") : null;
 }

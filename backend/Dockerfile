@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.7
 # Based on astral-sh/uv-docker-example best practices (May 2026).
 FROM ghcr.io/astral-sh/uv:0.5-python3.13-bookworm-slim AS builder
 

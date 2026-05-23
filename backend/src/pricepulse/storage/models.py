@@ -39,7 +39,7 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
-    favorites: Mapped[list["Favorite"]] = relationship(
+    favorites: Mapped[list[Favorite]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
         lazy="selectin",
@@ -68,7 +68,7 @@ class Favorite(Base):
         DateTime(timezone=True), server_default=func.now(), index=True
     )
 
-    user: Mapped["User"] = relationship(back_populates="favorites")
+    user: Mapped[User] = relationship(back_populates="favorites")
 
 
 class Query(Base):
@@ -97,4 +97,4 @@ class Offer(Base):
     )
 
 
-__all__ = ["Base", "User", "Favorite", "Query", "Offer"]
+__all__ = ["Base", "Favorite", "Offer", "Query", "User"]

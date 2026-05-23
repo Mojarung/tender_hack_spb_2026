@@ -21,7 +21,6 @@ import httpx
 import orjson
 from pydantic import BaseModel, Field
 
-
 CaptchaKind = Literal["text", "silhouettes", "click_object", "kaleidoscope"]
 
 _PROMPTS: dict[CaptchaKind, str] = {
@@ -67,12 +66,18 @@ class VLMSolver:
 
     def __init__(
         self,
-        base_url: str = "http://ollama:11434",
-        model: str = "gemma4:e4b",
+        base_url: str | None = None,
+        model: str | None = None,
         timeout_s: float = 30.0,
     ) -> None:
-        self._client = httpx.AsyncClient(base_url=base_url, timeout=timeout_s)
-        self._model = model
+        from pricepulse.config import get_settings
+
+        settings = get_settings()
+        self._client = httpx.AsyncClient(
+            base_url=base_url or settings.ollama_url,
+            timeout=timeout_s,
+        )
+        self._model = model or settings.ollama_vision_model
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -93,4 +98,4 @@ class VLMSolver:
         return VLMResult(text=parsed.get("text"), clicks=parsed.get("clicks"), raw=parsed)
 
 
-__all__ = ["VLMSolver", "VLMResult", "CaptchaKind"]
+__all__ = ["CaptchaKind", "VLMResult", "VLMSolver"]

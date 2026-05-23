@@ -30,32 +30,38 @@ async def admin_features(settings: SettingsDep) -> JSONResponse:
 
 
 @router.get("/admin/links")
-async def admin_links() -> JSONResponse:
-    """Machine-readable list of admin URLs — used by the SPA frontend."""
+async def admin_links(settings: SettingsDep) -> JSONResponse:
+    """Machine-readable list of admin URLs. Host comes from ``ADMIN_HOST``
+    so the same code serves dev (localhost) and prod (internal hostname).
+    Ports are docker-compose host-port mappings and stay inline."""
+    host = settings.admin_host.rstrip("/")
+
+    def link(name: str, port: int, path: str = "") -> dict:
+        return {"name": name, "url": f"{host}:{port}{path}", "port": port}
+
     return JSONResponse(
         {
             "core": [
-                {"name": "FastAPI", "url": "http://localhost:8000/docs", "port": 8000},
-                {"name": "n8n", "url": "http://localhost:5678", "port": 5678},
-                {"name": "Firecrawl", "url": "http://localhost:3002", "port": 3002},
-                {"name": "SearXNG", "url": "http://localhost:8080", "port": 8080},
+                link("FastAPI", settings.api_port, "/docs"),
+                link("n8n", 5678),
+                link("SearXNG", 8080),
+                link("Spellcheck (SAGE)", 8095, "/health"),
             ],
             "observability": [
-                {"name": "Grafana", "url": "http://localhost:3000", "port": 3000},
-                {"name": "Prometheus", "url": "http://localhost:9090", "port": 9090},
-                {"name": "Dozzle", "url": "http://localhost:8888", "port": 8888},
-                {"name": "Uptime Kuma", "url": "http://localhost:3001", "port": 3001},
-                {"name": "GlitchTip", "url": "http://localhost:8001", "port": 8001},
-                {"name": "ntfy", "url": "http://localhost:8090", "port": 8090},
-                {"name": "Apprise", "url": "http://localhost:8082", "port": 8082},
+                link("Grafana", 3000),
+                link("Prometheus", 9090),
+                link("Dozzle", 8888),
+                link("Uptime Kuma", 3001),
+                link("GlitchTip", 8001),
+                link("ntfy", 8090),
+                link("Apprise", 8082),
             ],
             "storage": [
-                {"name": "pgAdmin", "url": "http://localhost:5050", "port": 5050},
-                {"name": "MinIO", "url": "http://localhost:9001", "port": 9001},
+                link("pgAdmin", 5050),
+                link("MinIO", 9001),
             ],
             "antibot": [
-                {"name": "Ollama (Gemma 4)", "url": "http://localhost:11434", "port": 11434},
-                {"name": "2Captcha", "url": "https://2captcha.com/enterpage"},
+                {"name": "Ollama (Gemma 4)", "url": settings.ollama_url},
             ],
         }
     )

@@ -19,14 +19,6 @@
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
     },
-    "firecrawl": {
-      "command": "npx",
-      "args": ["-y", "firecrawl-mcp"],
-      "env": {
-        "FIRECRAWL_API_URL": "http://localhost:3002",
-        "FIRECRAWL_API_KEY": ""
-      }
-    },
     "postgres": {
       "command": "uvx",
       "args": ["postgres-mcp", "--access-mode=restricted"],

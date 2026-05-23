@@ -174,7 +174,7 @@ async def _dispatch_tool_call(call: dict[str, Any]) -> dict:
         return {"error": f"unknown tool: {name}"}
     try:
         return await spec.handler(args)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log.warning("chat.tool_failed", tool=name, error=str(exc))
         return {"error": f"{name} failed: {exc}"}
 

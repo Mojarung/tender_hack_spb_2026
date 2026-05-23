@@ -85,27 +85,38 @@ services:
       "
     networks: [pricepulse]
 
-  # ===== 4th source: self-hosted Firecrawl + SearXNG =====
-  firecrawl-api:
-    image: ghcr.io/mendableai/firecrawl:latest
-    env_file: .env
-    environment:
-      USE_DB_AUTHENTICATION: "false"
-      REDIS_URL: redis://redis:6379
-      SEARXNG_ENDPOINT: http://searxng:8080
-    depends_on: [redis, searxng]
-    ports:
-      - "3002:3002"
-    networks: [pricepulse]
+  # ===== 4th source: self-hosted SearXNG =====
+  # Firecrawl (self-hosted) was removed — methodology p.5 bans external
+  # APIs, and our runet scraper now parses JSON-LD directly from the URLs
+  # SearXNG returns. See backend/src/pricepulse/scrapers/runet.py.
 
   searxng:
     image: searxng/searxng:latest
     environment:
       BASE_URL: http://localhost:8080
       INSTANCE_NAME: pricepulse-searxng
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
     ports:
       - "8080:8080"
     networks: [pricepulse]
+
+  # Russian spell-correction microservice — SAGE FRED-T5 distilled-95M
+  # (backend/spellcheck/). Self-hosted transformer trained by SberDevices
+  # for Russian spelling, used by enrichment/normalize.py.
+  spellcheck:
+    build: ./spellcheck
+    ports:
+      - "8095:8080"
+    networks: [pricepulse]
+    healthcheck:
+      test: ["CMD", "python", "-c",
+        "import urllib.request as u; u.urlopen('http://localhost:8080/health').read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s    # SAGE T5 takes ~15-30s to load on first boot
+    restart: unless-stopped
 
   # ===== Observability: Prometheus + Grafana + node/container exporters =====
   prometheus:
@@ -163,24 +174,37 @@ services:
       - /dev/disk/:/dev/disk:ro
     networks: [pricepulse]
 
-  # ===== Local LLM via Ollama =====
-  # Attribute fallback uses a small CPU-friendly text model:
-  # `ollama pull qwen2.5:0.5b` after first start.
-  # Vision CAPTCHA experiments can still use ollama_vision_model separately.
+  # ===== Local LLM (Gemma 4) for CAPTCHA + 4th-source extraction =====
+  #
+  # **Microservice, GPU-host friendly.** В проде Ollama поднимается на отдельной
+  # машине с GPU, backend ходит к нему по HTTP через `OLLAMA_URL`. Compose-блок
+  # ниже — только для локального dev (`docker compose --profile gpu up -d ollama`),
+  # CPU-инференс для vision слишком медленный.
+  #
+  # First-time setup on the chosen Ollama host:
+  #     ollama pull gemma4:e4b
   ollama:
     image: ollama/ollama:latest
+    profiles: ["gpu"]                # opt-in: not started by default
     ports:
       - "11434:11434"
     volumes:
       - ollamadata:/root/.ollama
-    # Uncomment to expose host GPU (NVIDIA Container Toolkit required)
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    # NVIDIA Container Toolkit required on the host.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
     networks: [pricepulse]
 
   # ===== Notifications =====
@@ -281,8 +305,11 @@ services:
     networks: [pricepulse]
 
   # ===== n8n: orchestration + alerts + live demo board =====
+  # Opt-in (`docker compose --profile ops up -d n8n`). Никакой бизнес-логики
+  # на n8n не висит — он используется только для алёртов в демо-режиме.
   n8n:
     image: docker.n8n.io/n8nio/n8n:latest
+    profiles: ["ops"]
     environment:
       N8N_BASIC_AUTH_ACTIVE: "true"
       N8N_BASIC_AUTH_USER: ${N8N_BASIC_AUTH_USER:-admin}

@@ -9,7 +9,7 @@ Bucket per key `ratelimit:{source}`:
   * capacity (burst) = rpm
   * refill rate      = rpm / 60 tokens per second
 
-See backend/docs/anti-bot.md §5 — this is the L0 "don't get blocked in
+See CLAUDE.md → Anti-bot слой — this is the L0 "don't get blocked in
 the first place" layer of the cascade.
 """
 

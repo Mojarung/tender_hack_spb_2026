@@ -5,7 +5,7 @@ import { ArrowUpRight, Search, Sparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
-const SOURCES = ["Wildberries", "Ozon", "Я.Маркет", "Megamarket", "DNS", "Citilink", "Re:Store"];
+const SOURCES = ["Wildberries", "Ozon", "Я.Маркет", "Рунет"];
 
 export function Hero() {
   const router = useRouter();

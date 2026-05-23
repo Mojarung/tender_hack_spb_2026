@@ -57,6 +57,7 @@ export interface SourceGroup {
   source: Source;
   count: number;
   min_price: string | null;
+  avg_price?: string | null;
   median_price?: string | null;
   currency: string;
   offers: ProductOffer[];
@@ -68,7 +69,9 @@ export interface NormalizedQuery {
   normalized: string;
   expansions: string[];
   attributes?: ProductAttributes | null;
+  alternates?: string[];
 }
+
 export interface RankedOffer {
   offer: ProductOffer;
   score: number;

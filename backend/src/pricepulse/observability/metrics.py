@@ -62,14 +62,14 @@ scrape_cost_units_total = Counter(
 
 
 __all__ = [
-    "scrape_requests_total",
-    "scrape_duration_seconds",
-    "scrape_offers_returned_total",
-    "proxy_in_use",
-    "captcha_solve_attempts_total",
+    "arq_queue_length",
     "browser_pool_size",
     "cache_hits_total",
     "cache_misses_total",
-    "arq_queue_length",
+    "captcha_solve_attempts_total",
+    "proxy_in_use",
     "scrape_cost_units_total",
+    "scrape_duration_seconds",
+    "scrape_offers_returned_total",
+    "scrape_requests_total",
 ]

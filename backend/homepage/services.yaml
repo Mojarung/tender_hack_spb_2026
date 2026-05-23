@@ -4,18 +4,14 @@
         href: http://localhost:8000/docs
         description: FastAPI OpenAPI
         icon: fastapi.png
-    - n8n:
-        href: http://localhost:5678
-        description: Orchestration / live demo board
-        icon: n8n.png
-    - Firecrawl:
-        href: http://localhost:3002
-        description: Self-hosted scraper + search
-        icon: firecrawl.png
     - SearXNG:
         href: http://localhost:8080
-        description: Free meta-search engine
+        description: URL-discovery для 4-го источника (Рунет)
         icon: searxng.png
+    - Spellcheck (SAGE):
+        href: http://localhost:8095/health
+        description: RU spell-correction микросервис
+        icon: si-huggingface
 
 - Observability:
     - Grafana:
@@ -62,29 +58,21 @@
         icon: redis.png
 
 - Anti-bot:
-    - Ollama:
+    - Ollama (GPU host):
         href: http://localhost:11434
-        description: Local Gemma 4 vision LLM
+        description: Gemma 4 vision (внешний микросервис в проде)
         icon: ollama.png
-    - 2Captcha:
-        href: https://2captcha.com/enterpage
-        description: External CAPTCHA fallback (RUB payments)
-        icon: si-2captcha
-    - Anti-bot strategy:
-        href: /docs/anti-bot
-        description: backend/docs/anti-bot.md
-        icon: si-markdown
 
 - Docs:
-    - ТЗ:
-        href: /docs/tz
-        description: Хакатонное положение
+    - CLAUDE.md:
+        href: /docs/claude
+        description: Source of truth — архитектура, конвенции, anti-bot стек
+        icon: si-markdown
+    - README:
+        href: /docs/readme
+        description: Quick start
         icon: si-readthedocs
     - Architecture:
         href: /docs/architecture
         description: backend/ARCHITECTURE.md
         icon: si-architecture
-    - Local LLM + Ops:
-        href: /docs/local-llm-and-ops
-        description: Gemma 4 + observability v2
-        icon: si-ollama

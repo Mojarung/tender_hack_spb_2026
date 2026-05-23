@@ -2,7 +2,7 @@
 
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
-import { Clock, Heart, LogOut, Search, Trash2, X } from "lucide-react";
+import { Clock, Heart, LogOut, MapPin, Search, Trash2, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
@@ -10,18 +10,46 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-hook";
 import { history } from "@/lib/history";
+import { DEFAULT_REGION_ID, RUSSIA_REGIONS, getRegion } from "@/lib/regions";
 import { useHistory } from "@/lib/use-history";
 import { Logo } from "./Logo";
+
+const REGION_STORAGE_KEY = "pp.region_id";
+
+function getStoredRegionId(): string | null {
+  if (typeof window === "undefined") return null;
+  return window.localStorage.getItem(REGION_STORAGE_KEY);
+}
+
+function setStoredRegionId(regionId: string) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(REGION_STORAGE_KEY, regionId);
+  window.dispatchEvent(new Event("pp.region"));
+}
 
 function SearchBox() {
   const router = useRouter();
   const params = useSearchParams();
   const items = useHistory();
   const [q, setQ] = useState(params.get("q") ?? "");
+  const [regionId, setRegionId] = useState(params.get("region_id") ?? String(DEFAULT_REGION_ID));
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => { setQ(params.get("q") ?? ""); }, [params]);
+
+  useEffect(() => {
+    const next = params.get("region_id") ?? getStoredRegionId() ?? String(DEFAULT_REGION_ID);
+    setRegionId(next);
+  }, [params]);
+
+  useEffect(() => {
+    function onRegionChange() {
+      setRegionId(getStoredRegionId() ?? String(DEFAULT_REGION_ID));
+    }
+    window.addEventListener("pp.region", onRegionChange);
+    return () => window.removeEventListener("pp.region", onRegionChange);
+  }, []);
 
   // Close dropdown when clicking outside.
   useEffect(() => {
@@ -37,7 +65,7 @@ function SearchBox() {
     if (!t) return;
     history.push(t);
     setOpen(false);
-    router.push(`/search?q=${encodeURIComponent(t)}`);
+    router.push(`/search?q=${encodeURIComponent(t)}&region_id=${regionId}`);
   }
 
   return (
@@ -103,6 +131,51 @@ function SearchBox() {
   );
 }
 
+function RegionSelect() {
+  const router = useRouter();
+  const params = useSearchParams();
+  const q = params.get("q") ?? "";
+  const [regionId, setRegionId] = useState(params.get("region_id") ?? String(DEFAULT_REGION_ID));
+  const current = getRegion(Number(regionId));
+
+  useEffect(() => {
+    const next = params.get("region_id") ?? getStoredRegionId() ?? String(DEFAULT_REGION_ID);
+    setRegionId(next);
+  }, [params]);
+
+  function changeRegion(regionId: string) {
+    setRegionId(regionId);
+    setStoredRegionId(regionId);
+    const next = new URLSearchParams(params.toString());
+    next.set("region_id", regionId);
+    if (q.trim()) router.push(`/search?${next.toString()}`);
+  }
+
+  return (
+    <label
+      className="relative hidden lg:block"
+      title="Регион поиска. Применяется к Я.Маркету; WB / Ozon / Рунет используют общий каталог."
+    >
+      <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--color-ink-4)] pointer-events-none" />
+      <select
+        value={current.id}
+        onChange={(e) => changeRegion(e.target.value)}
+        className="appearance-none w-[210px] pl-9 pr-8 py-2.5 rounded-full bg-white border border-[var(--color-line)] text-sm text-[var(--color-ink-2)] shadow-[0_8px_24px_rgba(11,13,18,0.04)] focus:outline-none focus:border-[var(--color-accent)]"
+        aria-label="Регион поиска"
+      >
+        {RUSSIA_REGIONS.map((region) => (
+          <option key={`${region.id}-${region.name}`} value={region.id}>
+            {region.name}
+          </option>
+        ))}
+      </select>
+      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-[var(--color-ink-4)] pointer-events-none">
+        ▾
+      </span>
+    </label>
+  );
+}
+
 function Avatar({ name }: { name: string }) {
   // First grapheme of the display name (or e-mail before "@") in a coloured ring.
   const ch = (name || "?").trim().charAt(0).toUpperCase();
@@ -140,6 +213,10 @@ export function Header() {
 
         <Suspense fallback={<div className="flex-1" />}>
           <SearchBox />
+        </Suspense>
+
+        <Suspense fallback={null}>
+          <RegionSelect />
         </Suspense>
 
         <nav className="flex items-center gap-2">

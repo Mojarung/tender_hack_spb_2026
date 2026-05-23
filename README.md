@@ -1,124 +1,154 @@
-# PricePulse — Tender Hack SPb 2026
+# PricePulse
 
-> Интеллектуальный сервис поиска цен в открытых источниках.
-> [ТЗ хакатона](./tz.md) · [Продукт-чеклист](./product.md) · [Backend](./backend/README.md) · [Frontend](./frontend/README.md)
+> Интеллектуальный агрегатор цен для **Портала поставщиков** zakupki.mos.ru.
+> Хакатон **Tender Hack SPb 2026**, защита **24.05.2026**.
 
-PricePulse агрегирует цены товаров с Wildberries, Ozon, Яндекс Маркета и динамически выбираемого 4-го источника Рунета (Megamarket по умолчанию, Firecrawl/SearXNG для свободного поиска). Свободный режим без единого платежа — переключаемые feature-flags позволяют включить residential-прокси, 2Captcha и облачные scraper-API на проде.
+PricePulse за один запрос показывает поставщику минимальную и среднюю цену
+товара на **Wildberries**, **Ozon**, **Яндекс Маркете** и в **открытом Рунете**
+(self-hosted SearXNG → JSON-LD), с поправкой на регион, опечатки и синонимы.
+Весь стек **on-prem** — методичка `final_presa.pdf` p.5 запрещает любые внешние
+платные API (никаких 2Captcha, Firecrawl-cloud, Gemini, Scrapfly и т.п.).
 
-## Что уже работает
+📚 **Источник истины по архитектуре** — [`CLAUDE.md`](./CLAUDE.md).
+📋 **ТЗ хакатона** — [`tz.md`](./tz.md) · **продуктовые требования** — [`product.md`](./product.md).
 
-### Backend (`backend/`)
-- **Поиск** — `POST /api/v1/search` параллельно через 4 источника, fan-out + Best-Deal-ранжирование.
-- **Streaming** — `GET /api/v1/search/stream` через SSE.
-- **Price-history** — `GET /api/v1/price-history/{source}/{item_id}` (накопительно в Redis, sorted-set).
-- **Sentiment** — `GET /api/v1/sentiment/{source}/{item_id}` через `seara/rubert-tiny2-russian-sentiment` (ленивая загрузка модели).
-- **WB feedbacks** — fetcher `feedbacks{1,2}.wb.ru` с shard-fallback.
-- **Auth** — `fastapi-users` JWT: `POST /auth/register`, `POST /auth/jwt/login`, `GET /users/me`.
-- **Favorites** — `GET/POST/DELETE /api/v1/favorites` (требует JWT).
-- **Chat-бот** — `POST /api/v1/chat`: Gemma 4 (Ollama) с tool-calling, история в Redis.
-- **MCP-сервер** — `python -m pricepulse.agent.mcp_server http 8050` экспонирует те же tools для внешних агентов (Claude Code, Cursor).
-- **Метрики** — `/metrics` (Prometheus instrumentator + кастомные `scrape_*` counters/histograms).
-- **Admin landing** — `/admin` со ссылками на Grafana, n8n, pgAdmin, MinIO console, Ollama, и т.д.
-- **Free-mode flag** — `FEATURES_ALLOW_PAID=false` killswitch, гранулярные `FEATURE_USE_*` флаги. `COST_CAP_USD=0` по умолчанию.
+---
 
-### Frontend (`frontend/`)
-- **Next.js 16 + Tailwind v4** scaffold с дизайном по MORENT/Pickolab (primary `#3563E9`, белый surface).
-- Страницы: `/`, `/search?q=...`, `/favorites`, `/login`, `/register`.
-- Плавающий чат-виджет с Gemma 4.
-- Карточка товара с «♥ в избранное» (с auth-fallback на `/login`).
-- API-клиент через Next rewrites (same-origin).
+## 1. Что внутри
 
-### Инфраструктура (docker-compose)
-- `api` + `worker` (arq) + `postgres` + `redis` + `minio`
-- `prometheus` + `grafana` + `node-exporter` + `cadvisor` + `n8n`
-- `firecrawl-api` + `searxng` (self-hosted 4-й источник)
-- `ollama` (Gemma 4 локально)
-- `ntfy` + `apprise` (уведомления)
-- `dozzle` + `uptime-kuma` + `glitchtip` (observability)
-- `pgadmin` + `homepage` (admin UIs)
+### Backend (`backend/`, Python 3.13 + FastAPI, всё async)
 
-## Стэк
-
-| Слой | Что |
+| Эндпоинт | Назначение |
 |---|---|
-| Backend | Python 3.13, FastAPI 0.128, uv, SQLAlchemy 2.0 (async), fastapi-users, fastmcp |
-| Scrapers (L1) | `httpx[http2]`, `curl_cffi` (TLS-impersonate Chrome 131) |
-| Scrapers (L2) | nodriver — CDP-direct стелс-браузер, без WebDriver (optional extra `stealth`) |
-| L3 fallback | Firecrawl hosted (free 500 cr/mo) + Scrapfly/Apify/ZenRows free tiers (через feature-flag) |
-| CAPTCHA | OpenCV slider solver + Gemma 4 vision (free) + 2Captcha (opt-in, RUB payments) |
-| LLM локально | Ollama + Gemma 4 (`gemma4:e4b` ≈ 5 GB Q4) |
-| NLP | `seara/rubert-tiny2-russian-sentiment` (optional extra `nlp`) |
-| Frontend | Next.js 16, React 19, Tailwind v4, TanStack Query, Recharts, lucide-react |
-| DB / Cache | Postgres 17 (prod) / SQLite (dev), Redis 7.4 |
-| Observability | Prometheus + Grafana + Dozzle + Uptime Kuma + GlitchTip |
+| `POST /api/v1/search` | Параллельный fan-out по 4 источникам, группировка, Best-Deal-ранжирование |
+| `GET  /api/v1/search/stream` | То же, но через **SSE** — карточки прилетают по мере готовности |
+| `GET  /api/v1/price-history/{source}/{item_id}` | История цен в Redis sorted-set |
+| `GET  /api/v1/sentiment/{source}/{item_id}` | Тональность отзывов через `rubert-tiny2` (optional extra `nlp`) |
+| `POST /api/v1/chat` | Локальный чат-бот: Gemma 4 (Ollama) + tool-calling |
+| `GET  /metrics` | Prometheus с bounded-cardinality лейблами |
+| `GET  /admin` | Дашборд со ссылками на Grafana / pgAdmin / MinIO / etc. |
 
-## Быстрый старт (local-dev)
+**Поиск-пайплайн** (`orchestrator/search.py`):
+`normalize_query` → fan-out `asyncio.gather` → группировка `SourceGroup` (min / avg / median) → ранжирование.
+
+**Нормализация запроса** (`enrichment/normalize.py`):
+clean → бренд-fuzzy (RapidFuzz) → **SAGE FRED-T5** (микросервис) → транслит RU↔EN → синонимы (pymorphy3 + курируемый тезаурус). Весь результат кэшируется в Redis по `sha1(raw)` — повтор <2 мс (cold ≈ 900 мс).
+
+**Anti-bot каскад** (`antibot/`, L0 → L3, всё on-prem):
+
+| Слой | Что | Когда |
+|---|---|---|
+| **L0** | Redis token-bucket (атомарный Lua) | Всегда |
+| **L1** | `curl_cffi` (TLS-impersonate Chrome 131) | По умолчанию (WB/YM) |
+| **L2** | `nodriver` (CDP-direct стелс-браузер) | Эскалация по circuit-breaker (Ozon) |
+| **L3** | OpenCV slider + Gemma 4 vision via Ollama | На капчу |
+
+### Frontend (`frontend/`, Next.js 16 + Tailwind v4)
+Главная, `/search`, `/favorites`, `/login`, `/register`, плавающий чат-виджет, карточка товара. Селектор региона из 89 канонических Yandex `lr`-кодов.
+
+### Микросервисы (отдельные docker-сервисы)
+
+| Сервис | Назначение | Порт (host) |
+|---|---|---|
+| `spellcheck` | SAGE FRED-T5 distilled-95M (Сбер, MIT, F1=78.9 на RUSpellRU) | 8095 |
+| `searxng` | URL-discovery для 4-го источника (Рунет) | 8080 |
+| `ollama` | Gemma 4 для VLM-капчи и chat. **Опционален** (`--profile gpu`) — в проде живёт на отдельной GPU-машине | 11434 |
+| `redis` / `postgres` / `minio` | Storage / cache / image cache | стандартные |
+| `prometheus` / `grafana` / `dozzle` / `uptime-kuma` / `glitchtip` | Observability | стандартные |
+
+---
+
+## 2. Быстрый старт
+
+### Backend
+```bash
+cd backend
+uv sync                                              # базовые зависимости
+uv sync --extra stealth                              # +nodriver (L2 браузер)
+cp .env.example .env
+uv run uvicorn pricepulse.main:app --reload          # http://localhost:8000/docs
+```
+
+### Микросервисы (минимум для полного пайплайна)
+```bash
+cd backend
+docker compose up -d redis postgres searxng spellcheck
+# Ollama — отдельным шагом, см. §3.
+```
+
+### Frontend
+```bash
+cd frontend
+npm install
+npm run dev                                          # http://localhost:3000
+```
+
+### Тесты и линт
+```bash
+cd backend
+uv run pytest -q                                     # 62 passed (на 2026-05-23)
+uv run ruff check src/ tests/                        # clean
+```
+
+---
+
+## 3. Ollama как отдельный микросервис (prod-friendly)
+
+VLM-инференс на CPU — медленный. В проде Ollama поднимается на **отдельной
+машине с GPU**, backend ходит к нему по HTTP. Настройка — одной переменной:
 
 ```bash
-# 1) Backend
-cd backend
-uv sync                       # base deps (no torch)
-uv sync --extra nlp           # +sentiment (≈ 1.5 GB torch)
-cp .env.example .env          # уже есть .env с разумными дефолтами
-uv run uvicorn pricepulse.main:app --reload
+# .env
+OLLAMA_URL=http://ollama-gpu.internal.example.com:11434
+OLLAMA_VISION_MODEL=gemma4:e4b
+```
 
-# 2) Frontend
-cd ../frontend
-pnpm install
-pnpm dev                      # http://localhost:3000
-
-# 3) Локальный LLM-бот (опц.)
-ollama serve &
+Для локальной отладки compose-сервис `ollama` остался, но **opt-in**:
+```bash
+docker compose --profile gpu up -d ollama
 ollama pull gemma4:e4b
 ```
 
-## Документация
+Если `OLLAMA_URL` недоступен — slider-solver продолжает работать, текстовый
+пайплайн поиска полностью функционален (graceful degradation).
 
-- [`backend/ARCHITECTURE.md`](./backend/ARCHITECTURE.md) — слои, контракты API, структура каталогов
-- [`backend/docs/anti-bot.md`](./backend/docs/anti-bot.md) — стратегия защиты, L1→L5 cascade, per-source playbook
-- [`backend/docs/free-mode.md`](./backend/docs/free-mode.md) — бесплатный стек по умолчанию, feature-flags
-- [`backend/docs/local-llm-and-ops.md`](./backend/docs/local-llm-and-ops.md) — Gemma 4, OpenCV solver, ntfy, observability v2
-- [`backend/docs/firecrawl-test-report.md`](./backend/docs/firecrawl-test-report.md) — почему Firecrawl ≠ silver bullet
-- [`product.md`](./product.md) — продуктовые требования, DoD
+---
 
-## CHANGELOG
+## 4. Конвенции (важно при работе над проектом)
 
-### 2026-05-22
+- **Python 3.13, uv везде** — в локалке, в Dockerfile (`ghcr.io/astral-sh/uv:python3.11-bookworm-slim`), в CI. Никакого `pip install`.
+- **Никаких внешних API в проде** — методичка p.5. Сторонние сервисы (SAGE, SearXNG, Ollama) поднимаем только локально или на своих серверах.
+- **Прежде чем добавлять зависимость** — web-research: актуальная ли, MIT-совместима ли, не противоречит ли методичке.
+- **Async everywhere**. Pydantic v2, structlog.
+- **ruff** `line-length = 120`. Полные правила — `backend/pyproject.toml`.
+- **Коммиты — без Co-Authored-By: Claude**.
 
-- **Anti-bot слой переделан** под актуальное состояние инструментов (см. [`CLAUDE.md`](./CLAUDE.md)):
-  - `antibot/ratelimit.py` — реальный token-bucket на Redis (атомарный Lua-скрипт), с graceful-degradation в process-local bucket при недоступности Redis. Вшит в оркестратор — каждый запрос к источнику ждёт токен (`wb_rpm`/`ozon_rpm`/…).
-  - `antibot/browser_pool.py` — L2 стелс-браузер на **nodriver** (CDP-direct, без WebDriver — обходит automation-protocol fingerprinting). Camoufox отвергнут (beta, год без поддержки), Patchright — по бенчмарку May 2026 уступает nodriver.
-  - `antibot/cascade.py` вшит в оркестратор — circuit-breaker эскалирует слой L1→L4 (L5 за платным флагом) после 3 блокировок источника в окне 60 с.
-  - `antibot/browser_fetch.py` — L2-путь Ozon: прогрев сессии в браузере → OpenCV-солвер slider-капчи → fetch composer-api тем же origin (переиспользует L1-парсеры).
-  - `antibot/captcha.py` — реальная интеграция 2captcha для Yandex SmartCaptcha (только за платным флагом).
-  - Тесты: `test_ratelimit.py` + `test_cascade.py` (14 тестов). Весь сьют — 35 passed.
-  - Починен пред-существующий фейл `test_search_empty_groups` (повторная регистрация Prometheus-метрик при `create_app()` в фикстуре).
+---
 
-### 2026-05-21
+## 5. Структура репозитория
 
-- **Bot + MCP**: `POST /api/v1/chat` (Gemma 4 через Ollama, tool calling, история в Redis). Tools shared с MCP-сервером `pricepulse.agent.mcp_server` — экспортируется `search_products`, `get_top_deals`, `get_price_history`, `get_reviews_sample`, `compare_offers`.
-- **Auth**: `fastapi-users` v15 (JWT, SQLAlchemy UUID-юзеры) + Favorites CRUD, dev-режим на SQLite, prod на Postgres.
-- **Sentiment**: `seara/rubert-tiny2-russian-sentiment`, lazy-load, Redis-cache по hash текста, fallback на neutral без torch. Live-verified: 30 WB-отзывов → 92.3% positive / 3.8% / 3.8%.
-- **WB feedbacks**: `feedbacks{1,2}.wb.ru/feedbacks/v1/{imt_id}` с shard-fallback, 1000 отзывов/запрос.
-- **Best-Deal Score**: `top_deals[]` в `/api/v1/search` ответе, ранжирование по `price_z + rating + log(reviews)`.
-- **Price-history**: Redis sorted-set, WB-адаптер пишет точку на каждый scrape, endpoint `/api/v1/price-history/...`.
-- **MVP scrapers**: WB (search.wb.ru/v18 — реальные iPhone 15 128GB за 53 196 ₽), Ozon (mobile composer-api), YM (JSON-LD), Megamarket (mobile API), Runet (Firecrawl + JSON schema).
-- **Orchestrator**: asyncio.gather, per-adapter exception isolation, Runet→Megamarket auto-fallback при пустой выдаче.
-- **Frontend**: Next.js 16 + Tailwind v4 scaffold по дизайну MORENT (адаптация Car Rent → товары). Главная, /search, /favorites, /login, /register, плавающий чат.
-- **Observability**: scraper-метрики `scrape_requests_total{source,outcome,proxy_tier}`, `scrape_duration_seconds`, `scrape_offers_returned_total` — все 4 адаптера инструментированы.
-- **Free-mode**: killswitch `FEATURES_ALLOW_PAID=false` + гранулярные флаги. Cost-cap = $0 по дефолту.
-- **Локальный LLM-стэк**: docker-compose `ollama` сервис, инструкция `ollama pull gemma4:e4b`.
-- **MCP** для Claude Code: `.mcp.json.example` с Firecrawl MCP + наш собственный `pricepulse.agent.mcp_server`.
-- **Admin landing**: `/admin` HTML + Homepage `:3030` со ссылками на все сервисы.
+```
+backend/                  # FastAPI, источник истины по логике
+  src/pricepulse/
+    api/                  # routes, cache/limiter singletons
+    orchestrator/         # SearchOrchestrator
+    scrapers/             # wb, ozon, yandex_market, runet
+    enrichment/           # normalize, spellcheck client, thesaurus
+    antibot/              # ratelimit, browser_pool, cascade, vlm_solver
+    analytics/            # scoring, sentiment
+  spellcheck/             # SAGE FRED-T5 микросервис (отдельный Dockerfile)
+  docker-compose.yml
+  pyproject.toml
+frontend/                 # Next.js 16 (единственный фронт)
+.github/workflows/ci.yml  # ruff + pytest + frontend typecheck
+CLAUDE.md                 # архитектура / конвенции / открытые дыры
+tz.md, product.md         # требования
+final_presa.pdf           # методичка организаторов
+```
 
-### Что в работе / next
+---
 
-- Real-IP проверка Ozon/YM на сервере с residential RU IP.
-- Patchright/Camoufox L2 wiring (опциональная extra `stealth`).
-- arq periodic worker для backfill price-history.
-- Product detail page (`/product/[source]/[id]`) с sparkline + reviews + similar.
-- Sentiment + price-history embedded в карточки на главной.
+## 6. Лицензия
 
-## Лицензия
-
-MIT.
+MIT — за исключением **L2-браузера**: `nodriver` распространяется под **AGPL-3.0**,
+поэтому изолирован в опциональной extra `stealth` + ленивый импорт.

@@ -119,7 +119,6 @@ export function ProductCard({ offer, index = 0, highlight }: Props) {
         <div className="chip">
           <span className={clsx("source-dot", sourceClass[offer.source])} />
           {SOURCE_LABEL[offer.source]}
-          {offer.cached && <span className="text-[var(--color-ink-4)]">· кэш</span>}
         </div>
         <button
           onClick={toggleFav}

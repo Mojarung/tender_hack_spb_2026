@@ -58,7 +58,7 @@ async def _redis(settings: SettingsDep) -> Redis | None:
     client = Redis.from_url(settings.redis_url, decode_responses=True)
     try:
         await client.ping()
-    except Exception:  # noqa: BLE001
+    except Exception:
         await client.aclose()
         return None
     return client
@@ -83,7 +83,7 @@ async def chat(
         )
     except (InvalidPasswordException, UserNotExists) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise HTTPException(status_code=502, detail=f"chat engine failed: {exc}") from exc
 
     return ChatResponse(

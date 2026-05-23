@@ -38,7 +38,7 @@ class PricePoint:
 
 
 class PriceHistoryStore:
-    def __init__(self, redis: "Redis") -> None:
+    def __init__(self, redis: Redis) -> None:
         self._redis = redis
 
     async def record(self, source: str, item_id: str, price: Decimal) -> None:
@@ -51,13 +51,13 @@ class PriceHistoryStore:
             pipe.zadd(_key(source, item_id), {member: now.timestamp()})
             pipe.zremrangebyrank(_key(source, item_id), 0, -(_MAX_POINTS + 1))
             await pipe.execute()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.debug("price_history.record_failed", source=source, error=str(exc))
 
     async def get(self, source: str, item_id: str, limit: int = 200) -> list[PricePoint]:
         try:
             raw = await self._redis.zrange(_key(source, item_id), 0, -1)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.debug("price_history.read_failed", error=str(exc))
             return []
         points: list[PricePoint] = []

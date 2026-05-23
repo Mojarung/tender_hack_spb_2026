@@ -7,8 +7,7 @@ Strategy (free-mode L1):
     real client.
 
 If we still get 403 / antibot redirect → caller is expected to
-escalate to L2 (Patchright stealth browser) via the cascade router.
-See backend/docs/anti-bot.md §5.2.
+escalate to L2 (nodriver stealth browser) via the cascade router.
 """
 
 from __future__ import annotations
@@ -53,6 +52,16 @@ def _price_from_text(text: str) -> Decimal | None:
     if not cleaned:
         return None
     return Decimal(cleaned)
+
+
+def _safe_float(value: Any) -> float | None:
+    """Best-effort float — survives '4,5', None, 0, '' without raising."""
+    if value is None or value == "":
+        return None
+    try:
+        return float(str(value).replace(",", "."))
+    except (TypeError, ValueError):
+        return None
 
 
 def _iter_search_widgets(layout_widgets: dict[str, Any]) -> list[dict[str, Any]]:
@@ -144,7 +153,7 @@ def _extract_offers(widget_payloads: list[dict[str, Any]], limit: int) -> list[P
                     "seller": str(tracking.get("sellerName") or ""),
                 },
                 seller=tracking.get("sellerName"),
-                rating=float(tracking["rating"]) if tracking.get("rating") else None,
+                rating=_safe_float(tracking.get("rating")),
                 fetched_at=now,
                 cached=False,
             )
@@ -170,6 +179,8 @@ class OzonScraper:
         query: NormalizedQuery,
         limit: int,
         on_offer: OnOffer | None = None,
+        *,
+        region_id: int = 213,
     ) -> ScrapeResult:
         """L1 mobile API, escalating to the L2 stealth browser on a block."""
         result = await self._search_l1(query, limit, on_offer=on_offer)

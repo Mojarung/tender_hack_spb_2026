@@ -19,10 +19,8 @@ dependencies = [
     "httpx[http2]>=0.28",
     "curl-cffi>=0.7",           # TLS impersonation (chrome131), HTTP/2+3
     "tenacity>=9.0",
-    # ===== Browser (L2 for YandexMarket XHR interception) =====
-    "playwright>=1.49",
-    # ===== 4-th source =====
-    "firecrawl-py>=2.0",
+    # 4-th source — self-hosted SearXNG + own JSON-LD parser, no third-party API.
+    # See scrapers/runet.py. (Firecrawl removed: methodology p.5 bans external APIs.)
     # ===== Storage =====
     "redis>=5.2",
     "arq>=0.26",
@@ -35,17 +33,17 @@ dependencies = [
     "fastapi-users[sqlalchemy]>=14.0",
     # ===== Agent: MCP tool server + chatbot =====
     "fastmcp>=3.2",
-    # ===== NLP / fuzzy =====
+    # ===== NLP / fuzzy (core — query normalisation needs these) =====
     "rapidfuzz>=3.10",
+    "pymorphy3>=2.0.6",         # RU lemmatization (dictionary-based, no torch)
+    "pymorphy3-dicts-ru>=2.4.417150.4580142",
+    "symspellpy>=6.9.0",
+    "wordfreq>=3.1.1",
     # ===== Observability =====
     "prometheus-fastapi-instrumentator>=7.1",
     "prometheus-client>=0.22",
     "structlog>=24.4",
     "orjson>=3.10",
-    "symspellpy>=6.9.0",
-    "pymorphy3>=2.0.6",
-    "pymorphy3-dicts-ru>=2.4.417150.4580142",
-    "wordfreq>=3.1.1",
 ]
 
 [project.optional-dependencies]
@@ -55,18 +53,16 @@ dependencies = [
 stealth = [
     "nodriver>=0.50",
 ]
-# Russian NLP / sentiment — adds ~1.5 GB of torch wheels, install on demand.
+# Russian sentiment — adds ~1.5 GB of torch wheels, install on demand.
 nlp = [
-    "pymorphy3>=2.0",
     "symspellpy>=6.7",
     "transformers>=4.46",
     "torch>=2.5",
 ]
-# CAPTCHA solving (only used if FEATURE_USE_2CAPTCHA=true).
+# Local slider-CAPTCHA solver (OpenCV template matching, on-prem). No external
+# captcha-service deps — methodology p.5 bans third-party APIs.
 captcha = [
-    "2captcha-python>=1.5",
     "opencv-python-headless>=4.10",
-    "primp>=0.6",
 ]
 
 [dependency-groups]
@@ -91,7 +87,7 @@ packages = ["src/pricepulse"]
 package = true
 
 [tool.ruff]
-line-length = 100
+line-length = 120          # bumped from 100 — Russian strings, Pydantic Field defaults, dataclass init lines
 target-version = "py313"
 src = ["src", "tests"]
 
@@ -107,10 +103,19 @@ select = [
     "C4",
     "RUF",
 ]
-ignore = ["S101"]
+ignore = [
+    "S101",   # assert in tests is fine
+    "B008",   # FastAPI / typer use `def f(x = Depends(...))` idiomatically
+    "RUF001", # Russian project — Cyrillic chars that look like Latin are intentional
+    "RUF002", # same, in docstrings
+    "RUF003", # same, in comments
+]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S105", "S106", "S311"]
+"src/pricepulse/config.py" = ["S105"]            # dev-default credentials (overridden by env in prod)
+"src/pricepulse/core/exceptions.py" = ["N818"]   # `RateLimited`, `CaptchaChallenge` — domain names without Error suffix
+"src/pricepulse/antibot/fingerprints.py" = ["S311"]  # non-cryptographic UA / viewport choice
 
 [tool.mypy]
 python_version = "3.13"
