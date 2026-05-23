@@ -32,7 +32,6 @@ from pricepulse.analytics.sentiment import (
 from pricepulse.config import get_settings
 from pricepulse.domain.enums import SourceKind
 from pricepulse.domain.models import RankedOffer, SourceGroup
-from pricepulse.orchestrator.search import SearchOrchestrator
 from pricepulse.scrapers.wb_feedbacks import fetch_wb_feedbacks
 
 log = structlog.get_logger(__name__)
@@ -69,6 +68,13 @@ async def search_products(query: str, max_per_source: int = 5) -> dict:
         query: free-form product query in Russian or English
         max_per_source: how many offers to keep per source (default 5)
     """
+    from pricepulse.api.cache import get_rate_limiter, get_search_cache
+    from pricepulse.orchestrator.search import SearchOrchestrator
+
+    orchestrator = SearchOrchestrator(
+        cache=await get_search_cache(),
+        limiter=await get_rate_limiter(),
+    )
     normalized, groups, top_deals, clarification = await orchestrator.run(
         query=query, max_per_source=max_per_source
     )

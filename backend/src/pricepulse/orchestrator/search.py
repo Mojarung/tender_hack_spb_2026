@@ -23,7 +23,7 @@ from pricepulse.antibot.ratelimit import RateLimiter
 from pricepulse.cache.redis_cache import RedisCache
 from pricepulse.config import get_settings
 from pricepulse.domain.enums import SourceKind
-from pricepulse.domain.models import NormalizedQuery, ProductOffer, RankedOffer, SourceGroup, QueryClarification
+from pricepulse.domain.models import NormalizedQuery, ProductOffer, QueryClarification, RankedOffer, SourceGroup
 from pricepulse.enrichment.normalize import normalize_query
 from pricepulse.enrichment.query_clarification import check_and_clarify_query
 from pricepulse.scrapers.base import ScrapeResult, ScraperProtocol
@@ -143,7 +143,7 @@ class SearchOrchestrator:
         """Yields SSE-shaped events as adapters report offers."""
         started = time.perf_counter()
         clarification_task = asyncio.create_task(check_and_clarify_query(query))
-        
+
         normalized = await normalize_query(query, fix=not nofix, cache=self._cache)
         yield "query_normalized", normalized.model_dump()
 

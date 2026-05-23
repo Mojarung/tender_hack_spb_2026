@@ -46,7 +46,7 @@ async def main() -> int:
                     structure[f"{k}.len"] = len(v)
                     if v and isinstance(v[0], dict):
                         structure[f"{k}[0].keys"] = list(v[0].keys())[:20]
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         structure["parse_error"] = str(exc)
         structure["text_head"] = resp.text[:500]
 

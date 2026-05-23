@@ -1,5 +1,5 @@
-import sys
 import asyncio
+import sys
 
 # Принудительно устанавливаем WindowsProactorEventLoopPolicy для корректной работы nodriver на Windows
 if sys.platform == "win32":

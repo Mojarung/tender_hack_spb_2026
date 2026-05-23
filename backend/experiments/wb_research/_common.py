@@ -58,7 +58,7 @@ def save_json(name: str, payload: Any) -> Path:
 
 
 class Timer:
-    def __enter__(self) -> "Timer":
+    def __enter__(self) -> Timer:
         self.t0 = time.perf_counter()
         return self
 
