@@ -65,6 +65,10 @@ _L1_HEADERS = {
     "Referer": "https://yandex.ru/",
 }
 
+_SPEC_SPLIT_RE = re.compile(r'data-auto="product-spec"')
+
+_MAX_SPEC_ENRICHMENTS = 5
+
 # ──────────────────────────────────────── L1 helpers ─────────────────────────
 
 def build_search_url(query: str, *, region_id: int = 213) -> str:
@@ -83,6 +87,48 @@ def build_region_url(url: str, *, region_id: int = 213) -> str:
 def build_region_cookies(*, region_id: int = 213) -> dict[str, str]:
     """Yandex primarily persists geo in cookies; `lr` alone is only a weak hint."""
     return {"yandex_gid": str(region_id), "gdpr": "0"}
+
+
+def _parse_specs_from_product_html(html: str) -> dict[str, str]:
+    """Extract characteristics from a Yandex Market product page HTML.
+
+    Parses <div aria-label="Характеристики"> rows identified by
+    data-auto="product-spec" (name) and class="b2ZT4" (value).
+    """
+    result: dict[str, str] = {}
+    idx = html.find('aria-label="Характеристики"')
+    if idx == -1:
+        return result
+    chars_html = html[idx : idx + 200_000]
+    for seg in _SPEC_SPLIT_RE.split(chars_html)[1:]:
+        nm = re.match(r'[^>]*>([^<]+)</span>', seg[:500])
+        if not nm:
+            continue
+        name = _clean_text(html_lib.unescape(nm.group(1)))
+        if not name:
+            continue
+        vm = re.search(r'class="b2ZT4"[^>]*>(.*?)</div>', seg[:3000], re.DOTALL)
+        if not vm:
+            continue
+        value = _clean_text(html_lib.unescape(re.sub(r'<[^>]+>', ' ', vm.group(1))))
+        if value:
+            result[name] = value
+    return result
+
+
+async def _http_fetch_product_specs(url: str, *, timeout_s: float = 6.0) -> dict[str, str]:
+    try:
+        from curl_cffi.requests import AsyncSession
+    except ImportError:
+        return {}
+    try:
+        async with AsyncSession(impersonate="chrome131", timeout=timeout_s) as s:
+            resp = await s.get(url, headers=_L1_HEADERS)
+        if resp.status_code != 200 or "showcaptcha" in str(resp.url):
+            return {}
+        return _parse_specs_from_product_html(resp.text)
+    except Exception:
+        return {}
 
 
 def _decode_price(node: Any) -> Decimal | None:
@@ -719,6 +765,38 @@ class YandexMarketScraper:
         self._browser_timeout_ms = browser_timeout_ms
         self._browser_wait_ms = browser_wait_ms
 
+    async def _enrich_with_specs(self, offers: list[ProductOffer]) -> list[ProductOffer]:
+        """Fetch product pages in parallel and merge characteristics into offers."""
+        import asyncio
+
+        targets = offers[:_MAX_SPEC_ENRICHMENTS]
+
+        async def _fetch(o: ProductOffer) -> tuple[str, dict[str, str]]:
+            specs = await _http_fetch_product_specs(str(o.url), timeout_s=6.0)
+            return str(o.url), specs
+
+        results = await asyncio.gather(*[_fetch(o) for o in targets], return_exceptions=True)
+        specs_by_url: dict[str, dict[str, str]] = {}
+        for r in results:
+            if isinstance(r, tuple):
+                url_key, specs = r
+                if specs:
+                    specs_by_url[url_key] = specs
+
+        if not specs_by_url:
+            return offers
+
+        enriched: list[ProductOffer] = []
+        for o in offers:
+            key = str(o.url)
+            if key in specs_by_url:
+                # Product page specs win over sparse search-snippet data
+                merged = {**specs_by_url[key], **o.characteristics}
+                enriched.append(o.model_copy(update={"characteristics": merged}))
+            else:
+                enriched.append(o)
+        return enriched
+
     async def search(
         self,
         query: NormalizedQuery,
@@ -733,9 +811,10 @@ class YandexMarketScraper:
             l1 = await self._http_search(query, limit, region_id=region_id)
             if len(l1) >= 2:
                 scrape_requests_total.labels(source=src, outcome="ok", proxy_tier="none").inc()
-                scrape_offers_returned_total.labels(source=src).inc(len(l1))
                 log.info("ya_market.l1_ok", returned=len(l1))
                 offers = _deduplicate(l1, limit)
+                offers = await self._enrich_with_specs(offers)
+                scrape_offers_returned_total.labels(source=src).inc(len(offers))
                 if on_offer:
                     for o in offers:
                         await on_offer(o)
@@ -749,6 +828,7 @@ class YandexMarketScraper:
                 l2 = []
 
             offers = _deduplicate(l2 or l1, limit)
+            offers = await self._enrich_with_specs(offers)
             outcome = "ok" if offers else "blocked"
             scrape_requests_total.labels(source=src, outcome=outcome, proxy_tier="none").inc()
             scrape_offers_returned_total.labels(source=src).inc(len(offers))
