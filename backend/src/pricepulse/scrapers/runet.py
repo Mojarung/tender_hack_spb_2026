@@ -188,6 +188,8 @@ class RunetScraper:
         query: NormalizedQuery,
         limit: int,
         on_offer: OnOffer | None = None,
+        *,
+        region_id: int = 213,
     ) -> ScrapeResult:
         searxng_url = get_settings().searxng_url.rstrip("/")
         q = (query.normalized or query.raw).strip()

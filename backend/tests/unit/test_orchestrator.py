@@ -23,6 +23,8 @@ class _Stub:
     async def search(
         self, query: NormalizedQuery, limit: int,
         on_offer: OnOffer | None = None,
+        *,
+        region_id: int = 213,
     ) -> ScrapeResult:
         if self._raises:
             raise self._raises

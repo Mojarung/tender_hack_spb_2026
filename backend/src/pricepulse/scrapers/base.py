@@ -24,4 +24,6 @@ class ScraperProtocol(Protocol):
         query: NormalizedQuery,
         limit: int,
         on_offer: OnOffer | None = None,
+        *,
+        region_id: int = 213,
     ) -> ScrapeResult: ...

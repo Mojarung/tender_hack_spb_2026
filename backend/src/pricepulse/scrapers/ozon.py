@@ -170,6 +170,8 @@ class OzonScraper:
         query: NormalizedQuery,
         limit: int,
         on_offer: OnOffer | None = None,
+        *,
+        region_id: int = 213,
     ) -> ScrapeResult:
         """L1 mobile API, escalating to the L2 stealth browser on a block."""
         result = await self._search_l1(query, limit, on_offer=on_offer)

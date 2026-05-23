@@ -18,7 +18,7 @@ import re
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
-from urllib.parse import quote, urljoin
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import orjson
 import structlog
@@ -51,6 +51,24 @@ _HEADERS = {
 }
 
 
+def build_search_url(query: str, *, region_id: int = 213) -> str:
+    params = urlencode({"text": query, "lr": region_id})
+    return f"{_BASE}/search?{params}"
+
+
+def build_region_url(url: str, *, region_id: int = 213) -> str:
+    """Keep Yandex Market links reproducible when opened outside the scraper session."""
+    parts = urlsplit(url)
+    params = dict(parse_qsl(parts.query, keep_blank_values=True))
+    params["lr"] = str(region_id)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(params), parts.fragment))
+
+
+def build_region_cookies(*, region_id: int = 213) -> dict[str, str]:
+    """Yandex primarily persists geo in cookies; `lr` alone is only a weak hint."""
+    return {"yandex_gid": str(region_id), "gdpr": "0"}
+
+
 def _decode_price(node: Any) -> Decimal | None:
     if isinstance(node, dict):
         node = node.get("price") or node.get("lowPrice")
@@ -60,6 +78,34 @@ def _decode_price(node: Any) -> Decimal | None:
         return Decimal(str(node))
     except (TypeError, ValueError):
         return None
+
+
+def _normalize_image_url(value: Any) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    if value.startswith("//"):
+        return f"https:{value}"
+    if value.startswith("/"):
+        return urljoin(_BASE, value)
+    if value.startswith("http://") or value.startswith("https://"):
+        return value
+    return None
+
+
+def _extract_image(node: Any) -> str | None:
+    if isinstance(node, str):
+        return _normalize_image_url(node)
+    if isinstance(node, list):
+        for item in node:
+            image = _extract_image(item)
+            if image:
+                return image
+    if isinstance(node, dict):
+        for key in ("url", "contentUrl", "thumbnailUrl", "image"):
+            image = _extract_image(node.get(key))
+            if image:
+                return image
+    return None
 
 
 def _is_product(obj: dict[str, Any]) -> bool:
@@ -99,7 +145,7 @@ def _ldjson_blocks(html: str) -> list[Any]:
     return out
 
 
-def _to_offer(p: dict[str, Any]) -> ProductOffer | None:
+def _to_offer(p: dict[str, Any], *, region_id: int = 213) -> ProductOffer | None:
     name = p.get("name") or ""
     offers_node = p.get("offers") or {}
     if isinstance(offers_node, list):
@@ -110,11 +156,13 @@ def _to_offer(p: dict[str, Any]) -> ProductOffer | None:
         return None
     if url.startswith("/"):
         url = urljoin(_BASE, url)
-    image_node = p.get("image")
-    if isinstance(image_node, list):
-        image_node = image_node[0] if image_node else None
-    if isinstance(image_node, str) and image_node.startswith("//"):
-        image_node = f"https:{image_node}"
+    url = build_region_url(url, region_id=region_id)
+    image = _extract_image(
+        p.get("image")
+        or p.get("thumbnailUrl")
+        or offers_node.get("image")
+        or offers_node.get("thumbnailUrl")
+    )
 
     rating_value = None
     rating_node = p.get("aggregateRating") or {}
@@ -123,6 +171,10 @@ def _to_offer(p: dict[str, Any]) -> ProductOffer | None:
             rating_value = float(rating_node.get("ratingValue"))
         except (TypeError, ValueError):
             rating_value = None
+    brand = p.get("brand")
+    brand_name = brand.get("name", "") if isinstance(brand, dict) else str(brand or "")
+    seller = offers_node.get("seller", {})
+    seller_name = seller.get("name") if isinstance(seller, dict) else None
 
     return ProductOffer(
         source=SourceKind.YA_MARKET,
@@ -130,12 +182,12 @@ def _to_offer(p: dict[str, Any]) -> ProductOffer | None:
         price=price,
         currency=offers_node.get("priceCurrency") or "RUB",
         url=url,
-        image=image_node,
+        image=image,
         characteristics={
-            "brand": (p.get("brand") or {}).get("name", "") if isinstance(p.get("brand"), dict) else str(p.get("brand") or ""),
+            "brand": brand_name,
             "rating_count": str((rating_node or {}).get("reviewCount") or ""),
         },
-        seller=offers_node.get("seller", {}).get("name") if isinstance(offers_node.get("seller"), dict) else None,
+        seller=seller_name,
         rating=rating_value,
         fetched_at=datetime.now(tz=UTC),
         cached=False,
@@ -153,20 +205,26 @@ class YandexMarketScraper:
         query: NormalizedQuery,
         limit: int,
         on_offer: OnOffer | None = None,
+        *,
+        region_id: int = 213,
     ) -> ScrapeResult:
         try:
             from curl_cffi.requests import AsyncSession
         except ImportError:    # pragma: no cover
             return ScrapeResult(source=self.source, offers=[], error="curl_cffi not installed")
 
-        url = f"{_BASE}/search?text={quote(query.normalized or query.raw)}"
+        url = build_search_url(query.normalized or query.raw, region_id=region_id)
         src = self.source.value
 
         with scrape_duration_seconds.labels(source=src).time():
             try:
                 async with AsyncSession(impersonate="chrome131", timeout=self._timeout) as s:
-                    resp = await s.get(url, headers=_HEADERS)
-            except Exception as exc:  # noqa: BLE001
+                    resp = await s.get(
+                        url,
+                        headers=_HEADERS,
+                        cookies=build_region_cookies(region_id=region_id),
+                    )
+            except Exception as exc:
                 scrape_requests_total.labels(source=src, outcome="timeout", proxy_tier="none").inc()
                 log.warning("ya_market.fetch_failed", error=str(exc))
                 return ScrapeResult(
@@ -188,7 +246,7 @@ class YandexMarketScraper:
             products = _walk_ldjson(blocks)
             offers: list[ProductOffer] = []
             for p in products:
-                offer = _to_offer(p)
+                offer = _to_offer(p, region_id=region_id)
                 if offer is None:
                     continue
                 offers.append(offer)

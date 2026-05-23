@@ -9,6 +9,7 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import { ProductCard } from "@/components/ProductCard";
 import { GridSkeleton } from "@/components/Skeleton";
 import { api } from "@/lib/api";
+import { DEFAULT_REGION_ID, getRegion } from "@/lib/regions";
 import { SOURCE_LABEL, type SearchResponse, type Source } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -19,6 +20,8 @@ function SearchInner() {
   const q = (params.get("q") ?? "").trim();
   const from = (params.get("from") ?? "").trim();    // original user query (after a fix)
   const nofix = params.get("nofix") === "1";
+  const regionId = Number(params.get("region_id") ?? DEFAULT_REGION_ID);
+  const region = getRegion(regionId);
   const [data, setData] = useState<SearchResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -44,7 +47,7 @@ function SearchInner() {
     // `from` present ⇒ we're already showing the canonical query.
     const useNofix = nofix || !!from;
 
-    api.search(q, 16, { nofix: useNofix })
+    api.search(q, 16, { nofix: useNofix, region_id: region.id })
       .then((r) => {
         if (cancelled) return;
         const fixed = r.query.normalized.trim();
@@ -58,6 +61,7 @@ function SearchInner() {
           const sp = new URLSearchParams();
           sp.set("q", fixed);
           sp.set("from", q);
+          sp.set("region_id", String(region.id));
           router.replace(`/search?${sp.toString()}`);
           // loading stays true; the next effect run flips it.
         } else {
@@ -73,7 +77,7 @@ function SearchInner() {
       });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, nofix]);
+  }, [q, nofix, region.id]);
 
   if (!q) {
     return (
@@ -89,6 +93,8 @@ function SearchInner() {
   const all = data?.groups?.flatMap((g) => g.offers) ?? [];
   const offers = filter === "all" ? all : all.filter((o) => o.source === filter);
   const empty = !loading && all.length === 0;
+  const sourceErrors = data?.groups?.filter((g) => g.error) ?? [];
+  const allSourcesFailed = !loading && !!data?.groups?.length && sourceErrors.length === data.groups.length;
 
   return (
     <div className="flex flex-col lg:flex-row gap-6">
@@ -130,7 +136,9 @@ function SearchInner() {
         <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35 }}>
           <h1 className="text-2xl font-semibold tracking-tight">Результаты по «{q}»</h1>
           <p className="text-sm text-[var(--color-ink-4)] mt-1">
-            {loading ? "Идёт поиск…" : `Найдено ${all.length} предложений`}
+            {loading
+              ? `Идёт поиск по региону: ${region.name}…`
+              : `Найдено ${all.length} предложений · ${region.name}`}
           </p>
 
           {/* tiny inline hint — replaces the old banner card */}
@@ -142,7 +150,7 @@ function SearchInner() {
               <CornerDownLeft className="inline w-3 h-3 mr-1 -mt-0.5" />
               исправлено из «{from}» ·{" "}
               <Link
-                href={`/search?q=${encodeURIComponent(from)}&nofix=1`}
+                href={`/search?q=${encodeURIComponent(from)}&nofix=1&region_id=${region.id}`}
                 className="text-[var(--color-accent)] hover:underline"
               >
                 искать как написал
@@ -156,7 +164,7 @@ function SearchInner() {
             >
               без исправлений ·{" "}
               <Link
-                href={`/search?q=${encodeURIComponent(q)}`}
+                href={`/search?q=${encodeURIComponent(q)}&region_id=${region.id}`}
                 className="text-[var(--color-accent)] hover:underline"
               >
                 включить
@@ -168,6 +176,13 @@ function SearchInner() {
         {err && (
           <div className="mt-4 p-3 rounded-xl bg-amber-50 text-amber-800 text-sm border border-amber-200">
             {err}
+          </div>
+        )}
+
+        {allSourcesFailed && (
+          <div className="mt-4 p-3 rounded-xl bg-amber-50 text-amber-900 text-sm border border-amber-200">
+            Все источники вернули ошибку, поэтому это не похоже на честный пустой результат.
+            Проверьте backend-логи или наведите на значки ⚠ в фильтре источников.
           </div>
         )}
 
@@ -241,6 +256,7 @@ function Pill({
     <li>
       <button
         onClick={onClick}
+        title={error ?? undefined}
         className={
           "w-full flex items-center justify-between gap-3 px-3 py-2 rounded-lg text-left transition-colors " +
           (checked ? "bg-[var(--color-ink)] text-white"
