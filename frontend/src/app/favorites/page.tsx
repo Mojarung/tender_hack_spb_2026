@@ -12,7 +12,9 @@ function toOffer(f: Favorite): ProductOffer {
   return {
     source: f.source as Source,
     name: f.name, price: f.price, currency: f.currency, url: f.url, image: f.image,
+    images: f.image ? [f.image] : [],
     characteristics: {}, seller: null, rating: null,
+    reviews: [], reviews_count: null,
     fetched_at: f.added_at, cached: false,
   };
 }

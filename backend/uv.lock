@@ -2195,6 +2195,7 @@ dependencies = [
     { name = "fastapi-users", extra = ["sqlalchemy"] },
     { name = "fastmcp" },
     { name = "httpx", extra = ["http2"] },
+    { name = "nodriver" },
     { name = "orjson" },
     { name = "prometheus-client" },
     { name = "prometheus-fastapi-instrumentator" },
@@ -2220,9 +2221,6 @@ nlp = [
     { name = "torch" },
     { name = "transformers" },
 ]
-stealth = [
-    { name = "nodriver" },
-]
 
 [package.dev-dependencies]
 dev = [
@@ -2247,7 +2245,7 @@ requires-dist = [
     { name = "fastapi-users", extras = ["sqlalchemy"], specifier = ">=14.0" },
     { name = "fastmcp", specifier = ">=3.2" },
     { name = "httpx", extras = ["http2"], specifier = ">=0.28" },
-    { name = "nodriver", marker = "extra == 'stealth'", specifier = ">=0.50" },
+    { name = "nodriver", specifier = ">=0.50" },
     { name = "opencv-python-headless", marker = "extra == 'captcha'", specifier = ">=4.10" },
     { name = "orjson", specifier = ">=3.10" },
     { name = "prometheus-client", specifier = ">=0.22" },
@@ -2267,7 +2265,7 @@ requires-dist = [
     { name = "transformers", marker = "extra == 'nlp'", specifier = ">=4.46" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
 ]
-provides-extras = ["stealth", "nlp", "captcha"]
+provides-extras = ["nlp", "captcha"]
 
 [package.metadata.requires-dev]
 dev = [

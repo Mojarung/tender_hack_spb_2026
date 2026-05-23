@@ -15,9 +15,18 @@ class ProductOffer(BaseModel):
     currency: str = "RUB"
     url: HttpUrl
     image: HttpUrl | None = None
+    # Full product gallery — main image first. `image` is kept as the
+    # "cover" alias for the card thumbnail; `images` is for the detail
+    # modal carousel. Other scrapers may leave this empty.
+    images: list[HttpUrl] = Field(default_factory=list)
     characteristics: dict[str, str] = Field(default_factory=dict)
     seller: str | None = None
     rating: float | None = None
+    # Optional product reviews (currently populated by Ozon — others may
+    # add it later). Each item: {"author": str|None, "score": int|None,
+    # "text": str}. Trimmed to the top-N most recent.
+    reviews: list[dict[str, str | int | None]] = Field(default_factory=list)
+    reviews_count: int | None = None
     fetched_at: datetime
     cached: bool = False
 

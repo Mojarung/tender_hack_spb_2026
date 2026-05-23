@@ -21,3 +21,6 @@ pricepulse.db
 pricepulse.db-journal
 *.sqlite
 *.sqlite3
+
+# Persistent stealth-browser profile + warmed Ozon cookies (per-machine state).
+var/

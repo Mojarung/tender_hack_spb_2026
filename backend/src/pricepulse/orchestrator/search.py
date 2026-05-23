@@ -27,9 +27,12 @@ from pricepulse.domain.models import NormalizedQuery, ProductOffer, RankedOffer,
 from pricepulse.enrichment.normalize import normalize_query
 from pricepulse.scrapers.base import ScrapeResult, ScraperProtocol
 from pricepulse.scrapers.ozon import OzonScraper
-from pricepulse.scrapers.runet import RunetScraper
-from pricepulse.scrapers.wb import WildberriesScraper
-from pricepulse.scrapers.yandex_market import YandexMarketScraper
+
+# TEMP: imports kept (commented in registry below) so reverting is one
+# uncomment, not a re-add. See _registry construction for the toggle.
+from pricepulse.scrapers.runet import RunetScraper  # noqa: F401
+from pricepulse.scrapers.wb import WildberriesScraper  # noqa: F401
+from pricepulse.scrapers.yandex_market import YandexMarketScraper  # noqa: F401
 
 log = structlog.get_logger(__name__)
 
@@ -54,13 +57,18 @@ class SearchOrchestrator:
         cascade: CascadeRouter | None = None,
     ) -> None:
         settings = get_settings()
-        # Default registry. RunetScraper is the 4th source — self-hosted
-        # SearXNG + JSON-LD scrape, no external APIs (methodology compliance).
+        # TEMP — Ozon-only mode while we soak-test the new cookie-warmed
+        # path end-to-end. Restore other sources by un-commenting once
+        # the Ozon pipeline is verified on the demo IP.
+        #
+        # self._registry: dict[SourceKind, ScraperProtocol] = adapters or {
+        #     SourceKind.WB: WildberriesScraper(),
+        #     SourceKind.OZON: OzonScraper(),
+        #     SourceKind.YA_MARKET: YandexMarketScraper(),
+        #     SourceKind.RUNET: RunetScraper(),
+        # }
         self._registry: dict[SourceKind, ScraperProtocol] = adapters or {
-            SourceKind.WB: WildberriesScraper(),
             SourceKind.OZON: OzonScraper(),
-            SourceKind.YA_MARKET: YandexMarketScraper(),
-            SourceKind.RUNET: RunetScraper(),
         }
         self._cache = cache
         # Anti-bot L0 — token-bucket rate limiter. Defaults to a process-local
@@ -226,11 +234,19 @@ class SearchOrchestrator:
                 region_id=region_id,
             )
         except Exception as exc:  # never propagate — isolate sources
+            # `str(exc)` is empty for many exception types (e.g. some
+            # nodriver/asyncio errors). `repr` keeps the type name.
             log.warning(
                 "orchestrator.adapter_crash",
-                source=adapter.source.value, error=str(exc),
+                source=adapter.source.value,
+                error=repr(exc),
+                error_type=type(exc).__name__,
+                exc_info=True,
             )
-            return ScrapeResult(source=adapter.source, offers=[], error=str(exc))
+            return ScrapeResult(
+                source=adapter.source, offers=[],
+                error=f"{type(exc).__name__}: {exc}".strip(": "),
+            )
 
         # Synonym retry — an empty (not blocked) result is often just a
         # vocabulary mismatch; retry once with the top synonym variant.
