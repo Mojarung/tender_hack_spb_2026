@@ -27,6 +27,23 @@ function appendOffer(existing: ProductOffer[], offer: ProductOffer): ProductOffe
   return [...existing, offer];
 }
 
+// Brand keys we've seen across WB / Ozon / Я.Маркет / Рунет JSON-LD.
+const BRAND_KEYS = ["brand", "Бренд", "Производитель", "Brand"] as const;
+
+function offerBrand(o: ProductOffer): string | null {
+  const c = o.characteristics ?? {};
+  for (const k of BRAND_KEYS) {
+    const v = c[k];
+    if (v && v.trim()) return v.trim();
+  }
+  return null;
+}
+
+function offerPriceNum(o: ProductOffer): number {
+  const n = Number(o.price);
+  return Number.isFinite(n) ? n : Number.NaN;
+}
+
 export const dynamic = "force-dynamic";
 
 function SearchInner() {
@@ -40,7 +57,12 @@ function SearchInner() {
   const [data, setData] = useState<SearchResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<Source | "all">("all");
+  // Filters — all client-side, derived facets recomputed on every render.
+  const [sourceFilter, setSourceFilter] = useState<Set<Source>>(() => new Set());
+  const [priceMin, setPriceMin] = useState<string>("");
+  const [priceMax, setPriceMax] = useState<string>("");
+  const [minRating, setMinRating] = useState<0 | 3 | 4>(0);
+  const [brandFilter, setBrandFilter] = useState<Set<string>>(() => new Set());
   // Inline correction display while streaming — populated from query_normalized
   // event so the user sees the canonical query immediately, not after `done`.
   // URL canonicalization still happens on `done` (so the stream isn't aborted).
@@ -66,6 +88,12 @@ function SearchInner() {
       groups: [], top_deals: [], took_ms: 0, partial: true,
     });
     setErr(null); setLoading(true); setLiveCorrection(null);
+    // New query ⇒ stale filters would silently hide unrelated brands/sources.
+    setSourceFilter(new Set());
+    setBrandFilter(new Set());
+    setPriceMin("");
+    setPriceMax("");
+    setMinRating(0);
 
     // `from` present ⇒ we're already showing the canonical query.
     const useNofix = nofix || !!from;
@@ -175,30 +203,196 @@ function SearchInner() {
   }
 
   const all = data?.groups?.flatMap((g) => g.offers) ?? [];
-  const offers = filter === "all" ? all : all.filter((o) => o.source === filter);
-  const empty = !loading && all.length === 0;
   const sourceErrors = data?.groups?.filter((g) => g.error) ?? [];
   const allSourcesFailed = !loading && !!data?.groups?.length && sourceErrors.length === data.groups.length;
+
+  // Facets — derived from the current result set so the sidebar only ever
+  // offers values the user can actually filter to. `Map` preserves insertion
+  // order which roughly mirrors the order offers arrived in.
+  const brandCounts = new Map<string, number>();
+  let priceLo = Number.POSITIVE_INFINITY;
+  let priceHi = 0;
+  for (const o of all) {
+    const b = offerBrand(o);
+    if (b) brandCounts.set(b, (brandCounts.get(b) ?? 0) + 1);
+    const p = offerPriceNum(o);
+    if (Number.isFinite(p)) {
+      if (p < priceLo) priceLo = p;
+      if (p > priceHi) priceHi = p;
+    }
+  }
+  const brands = [...brandCounts.entries()].sort((a, b) => b[1] - a[1]);
+
+  // Apply filters. Empty source-set ⇒ no filter (UX: never accidentally hide
+  // everything when no checkbox is ticked).
+  const offers = all.filter((o) => {
+    if (sourceFilter.size && !sourceFilter.has(o.source)) return false;
+    if (brandFilter.size) {
+      const b = offerBrand(o);
+      if (!b || !brandFilter.has(b)) return false;
+    }
+    const p = offerPriceNum(o);
+    const lo = priceMin.trim() ? Number(priceMin) : null;
+    const hi = priceMax.trim() ? Number(priceMax) : null;
+    if (lo != null && Number.isFinite(lo) && (Number.isNaN(p) || p < lo)) return false;
+    if (hi != null && Number.isFinite(hi) && (Number.isNaN(p) || p > hi)) return false;
+    if (minRating > 0 && (o.rating ?? 0) < minRating) return false;
+    return true;
+  });
+
+  const activeFilters =
+    sourceFilter.size + brandFilter.size +
+    (priceMin.trim() ? 1 : 0) + (priceMax.trim() ? 1 : 0) +
+    (minRating > 0 ? 1 : 0);
+
+  function resetFilters() {
+    setSourceFilter(new Set());
+    setBrandFilter(new Set());
+    setPriceMin("");
+    setPriceMax("");
+    setMinRating(0);
+  }
+
+  function toggleSource(s: Source) {
+    setSourceFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(s)) next.delete(s);
+      else next.add(s);
+      return next;
+    });
+  }
+
+  function toggleBrand(b: string) {
+    setBrandFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(b)) next.delete(b);
+      else next.add(b);
+      return next;
+    });
+  }
+
+  const empty = !loading && all.length === 0;
 
   return (
     <div className="flex flex-col lg:flex-row gap-6">
       <aside className="lg:w-[260px] shrink-0">
-        <div className="card p-5 sticky top-20">
-          <div className="text-xs uppercase tracking-wider text-[var(--color-ink-4)] font-medium mb-3">Источник</div>
-          <ul className="space-y-1 text-sm">
-            <Pill checked={filter === "all"} onClick={() => setFilter("all")} label="Все источники" count={all.length} />
-            {data?.groups?.map((g) => (
-              <Pill key={g.source} checked={filter === g.source}
-                onClick={() => setFilter(g.source)}
-                label={SOURCE_LABEL[g.source]} count={g.count} error={g.error}
-                group={g} currency={g.currency} />
-            ))}
-          </ul>
+        <div className="card p-5 sticky top-20 max-h-[calc(100vh-6rem)] overflow-y-auto">
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-xs uppercase tracking-wider text-[var(--color-ink-4)] font-medium">Фильтры</div>
+            {activeFilters > 0 && (
+              <button
+                type="button"
+                onClick={resetFilters}
+                className="text-[11px] text-[var(--color-accent)] hover:underline"
+              >
+                сбросить ({activeFilters})
+              </button>
+            )}
+          </div>
+
+          {/* Source — multi-select. Hidden until at least one source returned. */}
+          {data?.groups?.length ? (
+            <div className="mb-5">
+              <div className="text-[11px] uppercase tracking-wider text-[var(--color-ink-4)] mb-2">Источник</div>
+              <ul className="space-y-1 text-sm">
+                {data.groups.map((g) => (
+                  <SourceCheck
+                    key={g.source}
+                    checked={sourceFilter.has(g.source)}
+                    onToggle={() => toggleSource(g.source)}
+                    label={SOURCE_LABEL[g.source]}
+                    count={g.count}
+                    error={g.error}
+                    group={g}
+                    currency={g.currency}
+                  />
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {/* Price range */}
+          {(Number.isFinite(priceLo) || priceHi > 0) && (
+            <div className="mb-5">
+              <div className="text-[11px] uppercase tracking-wider text-[var(--color-ink-4)] mb-2">
+                Цена{Number.isFinite(priceLo) && priceHi > 0 && (
+                  <span className="ml-1.5 normal-case text-[var(--color-ink-4)] font-normal tracking-normal">
+                    {formatPrice(String(Math.floor(priceLo)), "RUB")} — {formatPrice(String(Math.ceil(priceHi)), "RUB")}
+                  </span>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  placeholder="от"
+                  value={priceMin}
+                  onChange={(e) => setPriceMin(e.target.value)}
+                  className="input !py-1.5 !px-2.5 text-sm w-full tabular-nums"
+                />
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  placeholder="до"
+                  value={priceMax}
+                  onChange={(e) => setPriceMax(e.target.value)}
+                  className="input !py-1.5 !px-2.5 text-sm w-full tabular-nums"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Rating */}
+          <div className="mb-5">
+            <div className="text-[11px] uppercase tracking-wider text-[var(--color-ink-4)] mb-2">Рейтинг</div>
+            <div className="flex gap-1.5">
+              {([0, 3, 4] as const).map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  onClick={() => setMinRating(r)}
+                  className={
+                    "px-2.5 py-1 rounded-full text-xs font-medium transition-colors " +
+                    (minRating === r
+                      ? "bg-[var(--color-ink)] text-white"
+                      : "bg-[var(--color-surface-2)] text-[var(--color-ink-3)] hover:bg-[var(--color-surface)]")
+                  }
+                >
+                  {r === 0 ? "Любой" : `от ${r}★`}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Brand — only if we have any */}
+          {brands.length > 0 && (
+            <div className="mb-5">
+              <div className="text-[11px] uppercase tracking-wider text-[var(--color-ink-4)] mb-2">
+                Бренд
+              </div>
+              <ul className="space-y-1 text-sm max-h-[200px] overflow-y-auto pr-1">
+                {brands.map(([brand, count]) => (
+                  <li key={brand}>
+                    <label className="flex items-center gap-2 py-1 cursor-pointer hover:text-[var(--color-ink)]">
+                      <input
+                        type="checkbox"
+                        checked={brandFilter.has(brand)}
+                        onChange={() => toggleBrand(brand)}
+                        className="accent-[var(--color-accent)]"
+                      />
+                      <span className="flex-1 truncate text-[var(--color-ink-2)]">{brand}</span>
+                      <span className="text-[11px] text-[var(--color-ink-4)] tabular-nums">{count}</span>
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {data?.top_deals?.length ? (
             <>
-              <div className="text-xs uppercase tracking-wider text-[var(--color-ink-4)] font-medium mt-6 mb-3">Лучшие сделки</div>
-              <ol className="space-y-1.5">
+              <div className="text-[11px] uppercase tracking-wider text-[var(--color-ink-4)] mb-2">Лучшие сделки</div>
+              <ol className="space-y-1.5 mb-4">
                 {data.top_deals.slice(0, 3).map((d) => (
                   <li key={d.rank} className="flex items-center gap-2 text-sm">
                     <span className="w-6 h-6 rounded-full bg-[var(--color-accent-50)] text-[var(--color-accent-2)] grid place-items-center text-[11px] font-bold">{d.rank}</span>
@@ -210,7 +404,7 @@ function SearchInner() {
           ) : null}
 
           {data?.took_ms != null && (
-            <div className="mt-6 pt-4 border-t border-[var(--color-line)] text-xs text-[var(--color-ink-4)]">
+            <div className="mt-4 pt-4 border-t border-[var(--color-line)] text-xs text-[var(--color-ink-4)]">
               Ответ за <span className="text-[var(--color-ink-2)] font-semibold tabular-nums">{data.took_ms} мс</span>
             </div>
           )}
@@ -228,7 +422,9 @@ function SearchInner() {
           <p className="text-sm text-[var(--color-ink-4)] mt-1">
             {loading
               ? `Идёт поиск по региону: ${region.name}…`
-              : `Найдено ${all.length} предложений · ${region.name}`}
+              : activeFilters > 0
+                ? `Показано ${offers.length} из ${all.length} · ${region.name}`
+                : `Найдено ${all.length} предложений · ${region.name}`}
           </p>
           {region.id !== DEFAULT_REGION_ID && !loading && (
             <p className="text-[11px] text-[var(--color-ink-4)] mt-1 italic">
@@ -347,35 +543,43 @@ function EmptyState({ query }: { query: string }) {
   );
 }
 
-function Pill({
-  checked, onClick, label, count, error, group, currency,
+function SourceCheck({
+  checked, onToggle, label, count, error, group, currency,
 }: {
-  checked: boolean; onClick: () => void; label: string; count: number;
-  error?: string | null; group?: SourceGroup; currency?: string;
+  checked: boolean;
+  onToggle: () => void;
+  label: string;
+  count: number;
+  error?: string | null;
+  group?: SourceGroup;
+  currency?: string;
 }) {
   const stats = group && count > 0 ? formatGroupStats(group, currency) : null;
-  const subColor = checked ? "text-white/70" : "text-[var(--color-ink-4)]";
   return (
     <li>
-      <button
-        onClick={onClick}
+      <label
         title={error ?? undefined}
-        className={
-          "w-full flex flex-col gap-0.5 px-3 py-2 rounded-lg text-left transition-colors " +
-          (checked ? "bg-[var(--color-ink)] text-white"
-                   : "hover:bg-[var(--color-surface-2)] text-[var(--color-ink-2)]")
-        }
+        className="flex items-start gap-2 px-1 py-1.5 rounded-lg cursor-pointer hover:bg-[var(--color-surface-2)]"
       >
-        <span className="flex items-center justify-between gap-3">
-          <span>{label}</span>
-          <span className={checked ? "text-white/80 text-xs" : "text-xs text-[var(--color-ink-4)]"}>
-            {error ? "⚠" : count}
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={onToggle}
+          className="mt-0.5 accent-[var(--color-accent)]"
+          aria-label={`Источник: ${label}`}
+        />
+        <span className="flex-1 min-w-0">
+          <span className="flex items-center justify-between gap-3">
+            <span className="text-[var(--color-ink-2)]">{label}</span>
+            <span className="text-xs text-[var(--color-ink-4)] tabular-nums">
+              {error ? "⚠" : count}
+            </span>
           </span>
+          {stats && (
+            <span className="block text-[11px] tabular-nums text-[var(--color-ink-4)]">{stats}</span>
+          )}
         </span>
-        {stats && (
-          <span className={`text-[11px] tabular-nums ${subColor}`}>{stats}</span>
-        )}
-      </button>
+      </label>
     </li>
   );
 }
