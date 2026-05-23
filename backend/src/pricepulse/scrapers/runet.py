@@ -79,22 +79,49 @@ def _is_excluded(url: str) -> bool:
 
 
 def _walk_jsonld(html: str) -> list[dict[str, Any]]:
-    """Pull every JSON-LD payload out of a page, flattening @graph entries."""
-    out: list[dict[str, Any]] = []
+    """Pull every JSON-LD payload out of a page, recursively expanding
+    container shapes (arrays, @graph, ItemList → itemListElement, mainEntity).
+
+    Many shops nest the Product inside ItemList / ListItem wrappers, so a
+    flat walk would miss them.
+    """
+    raw_blocks: list[Any] = []
     for match in _JSONLD_RE.finditer(html):
         try:
-            payload = orjson.loads(match.group(1))
+            raw_blocks.append(orjson.loads(match.group(1)))
         except orjson.JSONDecodeError:
             continue
-        if isinstance(payload, list):
-            out.extend(p for p in payload if isinstance(p, dict))
+
+    out: list[dict[str, Any]] = []
+    stack: list[Any] = list(raw_blocks)
+    seen: set[int] = set()
+    while stack:
+        node = stack.pop()
+        if isinstance(node, list):
+            stack.extend(node)
             continue
-        if not isinstance(payload, dict):
+        if not isinstance(node, dict):
             continue
-        out.append(payload)
-        graph = payload.get("@graph")
+        nid = id(node)
+        if nid in seen:
+            continue
+        seen.add(nid)
+        out.append(node)
+        graph = node.get("@graph")
         if isinstance(graph, list):
-            out.extend(g for g in graph if isinstance(g, dict))
+            stack.extend(graph)
+        ile = node.get("itemListElement")
+        if isinstance(ile, list):
+            for entry in ile:
+                if isinstance(entry, dict):
+                    inner = entry.get("item")
+                    if isinstance(inner, (dict, list)):
+                        stack.append(inner)
+                    else:
+                        stack.append(entry)
+        me = node.get("mainEntity")
+        if isinstance(me, (dict, list)):
+            stack.append(me)
     return out
 
 
@@ -179,7 +206,10 @@ class RunetScraper:
 
     source: SourceKind = SourceKind.RUNET
 
-    def __init__(self, timeout_s: float = 8.0, max_urls: int = 5) -> None:
+    def __init__(self, timeout_s: float = 8.0, max_urls: int = 15) -> None:
+        # max_urls is the SearXNG candidate pool — we stop fetching once
+        # `limit` offers are collected, so 15 is a soft cap that mostly bites
+        # only when every page lacks JSON-LD Product structured data.
         self._timeout = timeout_s
         self._max_urls = max_urls
 

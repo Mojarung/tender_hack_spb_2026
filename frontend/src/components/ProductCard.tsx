@@ -6,7 +6,7 @@ import { ArrowUpRight, Heart, Star } from "lucide-react";
 import { useState } from "react";
 import toast from "react-hot-toast";
 
-import { api, getToken } from "@/lib/api";
+import { api, getToken, proxyImage } from "@/lib/api";
 import { formatPrice, itemIdFromOffer } from "@/lib/format";
 import { SOURCE_LABEL, type ProductOffer } from "@/lib/types";
 
@@ -99,7 +99,7 @@ export function ProductCard({ offer, index = 0, highlight }: Props) {
         {offer.image && !imgFailed ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={offer.image}
+            src={proxyImage(offer.image, offer.source)}
             alt={offer.name}
             loading="lazy"
             onError={() => setImgFailed(true)}

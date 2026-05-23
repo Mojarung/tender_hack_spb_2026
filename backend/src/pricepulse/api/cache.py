@@ -23,6 +23,7 @@ import structlog
 
 from pricepulse.cache.redis_cache import RedisCache
 from pricepulse.config import get_settings
+from pricepulse.storage.s3 import ImageCache
 
 log = structlog.get_logger(__name__)
 
@@ -32,6 +33,8 @@ _cache_lock = asyncio.Lock()
 
 _limiter: Any = None      # RateLimiter — lazy-imported to avoid cycles
 _limiter_lock = asyncio.Lock()
+
+_image_cache: ImageCache | None = None
 
 
 async def get_search_cache() -> RedisCache | None:
@@ -89,3 +92,28 @@ async def close_rate_limiter() -> None:
     except Exception as exc:
         log.debug("rate_limiter.close_failed", error=str(exc))
     _limiter = None
+
+
+def get_image_cache() -> ImageCache | None:
+    """Return the singleton ImageCache, or ``None`` when disabled by config.
+
+    No ping at construction — `ensure_cached` already deals gracefully with
+    a MinIO/S3 outage by returning ``None`` (callers fall back to the
+    original URL), so a flaky bucket never wedges the API.
+    """
+    global _image_cache
+    if _image_cache is not None:
+        return _image_cache
+    settings = get_settings()
+    if not settings.image_cache_enabled:
+        return None
+    _image_cache = ImageCache(
+        endpoint=settings.s3_endpoint_url,
+        public_url=settings.s3_public_url or settings.s3_endpoint_url,
+        access_key=settings.s3_access_key,
+        secret_key=settings.s3_secret_key,
+        bucket=settings.s3_bucket,
+        region=settings.s3_region,
+    )
+    log.info("image_cache.enabled", bucket=settings.s3_bucket)
+    return _image_cache
