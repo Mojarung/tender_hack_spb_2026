@@ -64,7 +64,7 @@ export default function FavoritesPage() {
       <h1 className="text-2xl font-semibold tracking-tight">Избранное</h1>
       <p className="text-sm text-[var(--color-ink-4)] mt-1">{items.length} товаров</p>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mt-6">
         {items.map((f, i) => (
           <ProductCard key={f.id} offer={toOffer(f)} index={i} />
         ))}

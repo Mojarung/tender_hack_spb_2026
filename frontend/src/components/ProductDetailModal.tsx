@@ -201,7 +201,7 @@ export function ProductDetailModal({ offer, onClose }: Props) {
             <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)] gap-5 p-5 overflow-y-auto">
               {/* Gallery */}
               <div className="flex flex-col gap-3 min-w-0">
-                <div className="relative aspect-square bg-[var(--color-surface-2)] rounded-xl overflow-hidden grid place-items-center">
+                <div className="relative aspect-[3/4] bg-[var(--color-surface-2)] rounded-xl overflow-hidden grid place-items-center">
                   {images[activeImage] ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
