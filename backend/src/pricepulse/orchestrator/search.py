@@ -26,12 +26,12 @@ from pricepulse.domain.enums import SourceKind
 from pricepulse.domain.models import NormalizedQuery, ProductOffer, RankedOffer, SourceGroup
 from pricepulse.enrichment.normalize import normalize_query
 from pricepulse.scrapers.base import ScrapeResult, ScraperProtocol
-from pricepulse.scrapers.ozon import OzonScraper
 
 # TEMP: imports kept (commented in registry below) so reverting is one
 # uncomment, not a re-add. See _registry construction for the toggle.
+from pricepulse.scrapers.ozon import OzonScraper  # noqa: F401
 from pricepulse.scrapers.runet import RunetScraper  # noqa: F401
-from pricepulse.scrapers.wb import WildberriesScraper  # noqa: F401
+from pricepulse.scrapers.wb import WildberriesScraper
 from pricepulse.scrapers.yandex_market import YandexMarketScraper  # noqa: F401
 
 log = structlog.get_logger(__name__)
@@ -64,9 +64,9 @@ class SearchOrchestrator:
         cascade: CascadeRouter | None = None,
     ) -> None:
         settings = get_settings()
-        # TEMP — Ozon-only mode while we soak-test the new cookie-warmed
-        # path end-to-end. Restore other sources by un-commenting once
-        # the Ozon pipeline is verified on the demo IP.
+        # TEMP — WB-only mode while we soak-test the new DOM-scrape +
+        # card.json + feedbacks/v2 pipeline end-to-end. Restore the
+        # full set (or the hybrid Ozon+WB combo) by un-commenting.
         #
         # self._registry: dict[SourceKind, ScraperProtocol] = adapters or {
         #     SourceKind.WB: WildberriesScraper(),
@@ -75,7 +75,7 @@ class SearchOrchestrator:
         #     SourceKind.RUNET: RunetScraper(),
         # }
         self._registry: dict[SourceKind, ScraperProtocol] = adapters or {
-            SourceKind.OZON: OzonScraper(),
+            SourceKind.WB: WildberriesScraper(),
         }
         self._cache = cache
         # Anti-bot L0 — token-bucket rate limiter. Defaults to a process-local

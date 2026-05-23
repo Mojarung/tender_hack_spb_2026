@@ -13,8 +13,8 @@ async def test_search_empty_groups(client: AsyncClient) -> None:
     )
     assert response.status_code == 200
     body = response.json()
-    # TEMP — orchestrator/search.py registry is Ozon-only while we soak-test
-    # the new cookie-warmed path. Restore the full set when uncommenting the
-    # other scrapers there:
+    # TEMP — orchestrator/search.py registry is WB-only while we soak-test
+    # the new DOM-scrape + card.json + feedbacks/v2 pipeline. Restore the
+    # full set when uncommenting the other scrapers there:
     # assert {g["source"] for g in body["groups"]} == {"wb", "ozon", "ya_market", "runet"}
-    assert {g["source"] for g in body["groups"]} == {"ozon"}
+    assert {g["source"] for g in body["groups"]} == {"wb"}

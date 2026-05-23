@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator, metrics
 
 from pricepulse.antibot.browser_pool import close_browser_pool
+from pricepulse.antibot.wb_browser import close_wb_browser
 from pricepulse.api.cache import close_rate_limiter, close_search_cache
 from pricepulse.api.routes import (
     admin,
@@ -40,6 +41,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await close_search_cache()
     await close_rate_limiter()
     await close_browser_pool()
+    await close_wb_browser()
 
 
 def _instrument(app: FastAPI) -> None:

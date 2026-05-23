@@ -49,6 +49,17 @@ class Settings(BaseSettings):
     # (e.g. Yandex Browser on the dev machine).
     ozon_browser_path: str = ""
 
+    # Persistent Chrome profile for the WB stealth browser (separate
+    # from Ozon's). DOM-scrape of wildberries.ru's SSR catalog page
+    # needs an isolated profile so cookies don't bleed between
+    # marketplaces.
+    wb_profile_dir: str = "var/profiles/wb"
+    wb_browser_path: str = ""
+    # Per-offer concurrent enrichment limit (card.json + feedbacks v2).
+    wb_enrich_concurrency: int = 5
+    # Reviews per offer (each carries photos + video URLs).
+    wb_reviews_per_offer: int = 10
+
     # WB rpm намеренно снижен по результатам experiments/wb_research:
     # safe-rate probe ловил 429 уже на 6 RPM с одного IP, поэтому
     # держим бюджет консервативно низким.
