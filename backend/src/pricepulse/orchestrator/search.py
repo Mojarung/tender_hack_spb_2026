@@ -92,7 +92,7 @@ class SearchOrchestrator:
         *,
         nofix: bool = False,
     ) -> tuple[NormalizedQuery, list[SourceGroup], list[RankedOffer]]:
-        normalized = await normalize_query(query, fix=not nofix)
+        normalized = await normalize_query(query, fix=not nofix, cache=self._cache)
         adapters = self._pick(sources)
         results = await asyncio.gather(
             *[self._safe_call(a, normalized, max_per_source) for a in adapters]
@@ -109,7 +109,7 @@ class SearchOrchestrator:
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
         """Yields SSE-shaped events as adapters report offers."""
         started = time.perf_counter()
-        normalized = await normalize_query(query)
+        normalized = await normalize_query(query, cache=self._cache)
         yield "query_normalized", normalized.model_dump()
 
         adapters = self._pick(sources)
