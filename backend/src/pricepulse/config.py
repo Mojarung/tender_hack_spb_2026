@@ -54,10 +54,18 @@ class Settings(BaseSettings):
 
     # S3 / MinIO — image cache
     s3_endpoint_url: str = "http://minio:9000"
+    # Public URL the browser sees when we 302 to a cached image. In dev with
+    # MinIO it's usually the same as the endpoint; in prod it'd be a CDN
+    # hostname in front of MinIO/S3. Empty falls back to ``s3_endpoint_url``.
+    s3_public_url: str = ""
     s3_access_key: str = "pricepulse"
     s3_secret_key: str = "pricepulse_dev_password"
     s3_bucket: str = "pricepulse-images"
     s3_region: str = "us-east-1"
+    # Empty disables the image-proxy/cache layer — ProductCard then loads
+    # straight from marketplace CDNs. Tests / minimal demos can run without
+    # MinIO this way.
+    image_cache_enabled: bool = True
 
     # Local LLM via Ollama. Text fallback defaults to a small CPU-friendly model.
     ollama_url: str = "http://ollama:11434"

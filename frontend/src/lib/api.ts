@@ -40,6 +40,14 @@ const BASE =
   (typeof process !== "undefined" ? process.env.NEXT_PUBLIC_API_URL : undefined) ??
   "http://127.0.0.1:8000";
 
+/** Wrap a marketplace image URL in our caching proxy. Backend 302s either
+ *  to the cached MinIO copy (first hit warms it) or to the original URL
+ *  if MinIO is down — so this is always safe to call. */
+export function proxyImage(url: string | null | undefined, source: string): string {
+  if (!url) return "";
+  return `${BASE}/api/v1/image-proxy?source=${encodeURIComponent(source)}&url=${encodeURIComponent(url)}`;
+}
+
 const STORAGE_KEY = "pp.jwt";
 
 export function getToken(): string | null {

@@ -41,6 +41,10 @@ function SearchInner() {
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<Source | "all">("all");
+  // Inline correction display while streaming — populated from query_normalized
+  // event so the user sees the canonical query immediately, not after `done`.
+  // URL canonicalization still happens on `done` (so the stream isn't aborted).
+  const [liveCorrection, setLiveCorrection] = useState<{ from: string; to: string } | null>(null);
 
   /** When we replace the URL to the corrected query, the effect re-fires
    *  for the new `q`. The next run reuses the data already in state and
@@ -66,7 +70,7 @@ function SearchInner() {
       query: { raw: q, normalized: q, expansions: [] },
       groups: [], top_deals: [], took_ms: 0, partial: true,
     });
-    setErr(null); setLoading(true);
+    setErr(null); setLoading(true); setLiveCorrection(null);
 
     // `from` present ⇒ we're already showing the canonical query.
     const useNofix = nofix || !!from;
@@ -82,6 +86,12 @@ function SearchInner() {
           if (cancelled) return;
           normalizedCaptured = nq.normalized.trim();
           setData((d) => d ? { ...d, query: nq } : d);
+          // Show the correction in the page header right away — don't wait
+          // for `done`. URL canonicalization stays on `done` so we don't
+          // close the in-flight EventSource by triggering a route change.
+          if (!useNofix && normalizedCaptured && normalizedCaptured !== q.toLowerCase()) {
+            setLiveCorrection({ from: q, to: normalizedCaptured });
+          }
         },
         onSourceStarted: (e) => {
           if (cancelled) return;
@@ -272,7 +282,12 @@ function SearchInner() {
 
       <div className="flex-1 min-w-0">
         <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35 }}>
-          <h1 className="text-2xl font-semibold tracking-tight">Результаты по «{q}»</h1>
+          {(() => {
+            // Header query — prefer the corrected form once we have it,
+            // even mid-stream, so the user doesn't stare at their raw typo.
+            const displayedQuery = liveCorrection?.to ?? q;
+            return <h1 className="text-2xl font-semibold tracking-tight">Результаты по «{displayedQuery}»</h1>;
+          })()}
           <p className="text-sm text-[var(--color-ink-4)] mt-1">
             {loading
               ? `Идёт поиск по региону: ${region.name}…`
@@ -284,22 +299,26 @@ function SearchInner() {
             </p>
           )}
 
-          {/* tiny inline hint — replaces the old banner card */}
-          {from && !nofix && (
-            <motion.p
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-              className="mt-2 text-xs text-[var(--color-ink-4)]"
-            >
-              <CornerDownLeft className="inline w-3 h-3 mr-1 -mt-0.5" />
-              исправлено из «{from}» ·{" "}
-              <Link
-                href={`/search?q=${encodeURIComponent(from)}&nofix=1&region_id=${region.id}`}
-                className="text-[var(--color-accent)] hover:underline"
+          {/* Correction notice — `from` is the URL-canonical form (after
+              done), `liveCorrection` covers the in-flight stream window. */}
+          {(from || liveCorrection) && !nofix && (() => {
+            const fromText = from || liveCorrection?.from || "";
+            return (
+              <motion.p
+                initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+                className="mt-2 text-xs text-[var(--color-ink-4)]"
               >
-                искать как написал
-              </Link>
-            </motion.p>
-          )}
+                <CornerDownLeft className="inline w-3 h-3 mr-1 -mt-0.5" />
+                исправлено из «{fromText}» ·{" "}
+                <Link
+                  href={`/search?q=${encodeURIComponent(fromText)}&nofix=1&region_id=${region.id}`}
+                  className="text-[var(--color-accent)] hover:underline"
+                >
+                  искать как написал
+                </Link>
+              </motion.p>
+            );
+          })()}
           {nofix && (
             <motion.p
               initial={{ opacity: 0 }} animate={{ opacity: 1 }}

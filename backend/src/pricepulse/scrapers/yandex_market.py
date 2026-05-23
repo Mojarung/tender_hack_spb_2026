@@ -132,20 +132,44 @@ def _is_product(obj: dict[str, Any]) -> bool:
 
 
 def _walk_ldjson(blocks: list[Any]) -> list[dict[str, Any]]:
+    """Recursively flatten Schema.org container types into a list of Product dicts.
+
+    Yandex Market SERPs wrap product cards in ItemList → ListItem → item, so a
+    flat scan only sees the page-level "featured" Product (the «один товар»
+    bug). Containers we descend into: arrays, @graph, mainEntity, ItemList's
+    itemListElement (with or without ListItem wrappers).
+    """
     out: list[dict[str, Any]] = []
-    stack = list(blocks)
+    stack: list[Any] = list(blocks)
+    seen: set[int] = set()
     while stack:
-        item = stack.pop()
-        if isinstance(item, list):
-            stack.extend(item)
+        node = stack.pop()
+        if isinstance(node, list):
+            stack.extend(node)
             continue
-        if not isinstance(item, dict):
+        if not isinstance(node, dict):
             continue
-        if "@graph" in item and isinstance(item["@graph"], list):
-            stack.extend(item["@graph"])
+        nid = id(node)
+        if nid in seen:
             continue
-        if _is_product(item):
-            out.append(item)
+        seen.add(nid)
+        graph = node.get("@graph")
+        if isinstance(graph, list):
+            stack.extend(graph)
+        ile = node.get("itemListElement")
+        if isinstance(ile, list):
+            for entry in ile:
+                if isinstance(entry, dict):
+                    inner = entry.get("item")
+                    if isinstance(inner, (dict, list)):
+                        stack.append(inner)
+                    else:
+                        stack.append(entry)
+        me = node.get("mainEntity")
+        if isinstance(me, (dict, list)):
+            stack.append(me)
+        if _is_product(node):
+            out.append(node)
     return out
 
 
