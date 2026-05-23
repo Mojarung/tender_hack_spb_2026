@@ -1,0 +1,16 @@
+# uv-managed venv — recreated by `uv sync`, not in version control.
+.venv/
+
+# uv lockfile is fine to commit; uncomment if you want it ignored.
+# uv.lock
+
+# Heavy Patchright Chrome profile — keeps cookies/cache across runs but no
+# value in source control.
+.profile_ozon/
+
+# Per-run JSON / image / CSV dumps. Keep one or two as samples but don't
+# blow up the repo.
+_out/*.json
+_out/*.png
+_out/*.csv
+!_out/.gitkeep
