@@ -24,8 +24,9 @@ class ProductOffer(BaseModel):
     rating: float | None = None
     # Optional product reviews (currently populated by Ozon — others may
     # add it later). Each item: {"author": str|None, "score": int|None,
-    # "text": str}. Trimmed to the top-N most recent.
-    reviews: list[dict[str, str | int | None]] = Field(default_factory=list)
+    # "text": str, "published_at": str|None, "photos": list[str]}.
+    # Trimmed to the top-N most recent.
+    reviews: list[dict[str, str | int | list[str] | None]] = Field(default_factory=list)
     reviews_count: int | None = None
     fetched_at: datetime
     cached: bool = False

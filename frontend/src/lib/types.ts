@@ -12,6 +12,7 @@ export interface ProductReview {
   score: number | null;
   text: string;
   published_at?: string | null;
+  photos?: string[];
 }
 
 export interface ProductOffer {

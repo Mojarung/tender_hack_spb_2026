@@ -230,6 +230,23 @@ def backfill_from_pdp(offer: dict[str, Any], widget_states: dict[str, Any]) -> N
                 if val:
                     offer["price"] = val
                     break
+        # webReviewProductScore-* carries {score, reviewsCount, totalScore}.
+        # 0/null on products with no reviews — card UI hides zero ratings
+        # so storing 0 doesn't cause a display glitch.
+        if k.startswith("webReviewProductScore"):
+            p = _parse(k) or {}
+            score = p.get("score") or p.get("totalScore")
+            if score is not None and not offer.get("rating"):
+                try:
+                    offer["rating"] = float(score)
+                except (TypeError, ValueError):
+                    pass
+            count = p.get("reviewsCount")
+            if count is not None and offer.get("reviews_count") is None:
+                try:
+                    offer["reviews_count"] = int(count)
+                except (TypeError, ValueError):
+                    pass
 
 
 _REVIEW_CTA_TEXTS = {
@@ -319,6 +336,34 @@ def extract_reviews(widget_states: dict[str, Any], limit: int = 5) -> list[dict[
         if isinstance(published, dict):
             published = textrs_to_str(published)
 
+        # Review photos. Ozon stores them under a handful of shapes
+        # across versions: top-level `photos`/`images`, or nested
+        # under content.photos/content.images. Each entry is either a
+        # string URL or a dict with src/url/image keys.
+        photos: list[str] = []
+        for source in (
+            item.get("photos"),
+            item.get("images"),
+            (item.get("content") or {}).get("photos") if isinstance(item.get("content"), dict) else None,
+            (item.get("content") or {}).get("images") if isinstance(item.get("content"), dict) else None,
+            item.get("media"),
+        ):
+            if not isinstance(source, list):
+                continue
+            for it in source:
+                if isinstance(it, str) and it.startswith(("http://", "https://")):
+                    photos.append(it)
+                elif isinstance(it, dict):
+                    url = (
+                        it.get("src") or it.get("url") or it.get("image")
+                        or (it.get("photo") or {}).get("url")
+                    )
+                    if isinstance(url, str) and url.startswith(("http://", "https://")):
+                        photos.append(url)
+        # de-dup, cap so we don't ship 40 photos per review
+        seen_p: set[str] = set()
+        photos_unique = [u for u in photos if not (u in seen_p or seen_p.add(u))][:6]
+
         key = (author, text[:120])
         if key in seen:
             return None
@@ -328,6 +373,7 @@ def extract_reviews(widget_states: dict[str, Any], limit: int = 5) -> list[dict[
             "score": score,
             "text": text[:1000],
             "published_at": str(published) if published else None,
+            "photos": photos_unique,
         }
 
     def _walk(node: Any) -> None:

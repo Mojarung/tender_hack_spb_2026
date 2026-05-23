@@ -351,6 +351,27 @@ export function ProductDetailModal({ offer, onClose }: Props) {
                           <p className="text-sm text-[var(--color-ink)] leading-relaxed whitespace-pre-line">
                             {r.text}
                           </p>
+                          {r.photos && r.photos.length > 0 && (
+                            <div className="mt-2 flex gap-1.5 flex-wrap">
+                              {r.photos.map((src, pi) => (
+                                <a
+                                  key={src + pi}
+                                  href={src}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="block w-14 h-14 rounded-md overflow-hidden bg-[var(--color-surface)] hover:ring-2 hover:ring-[var(--color-accent-100)] transition-all"
+                                >
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img
+                                    src={proxyImage(src, offer.source)}
+                                    alt={`Фото отзыва ${pi + 1}`}
+                                    loading="lazy"
+                                    className="h-full w-full object-cover"
+                                  />
+                                </a>
+                              ))}
+                            </div>
+                          )}
                         </li>
                       ))}
                     </ul>
