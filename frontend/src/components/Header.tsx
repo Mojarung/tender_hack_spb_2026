@@ -104,22 +104,27 @@ function SearchBox() {
             </div>
             <ul>
               {items.slice(0, 8).map((it) => (
-                <li key={it.q} className="group">
+                /* Two SIBLING buttons inside a relative <li>.
+                 * Nesting <button> inside <button> is invalid HTML and
+                 * triggers a hydration error in React 19. The "X"
+                 * remove button is absolutely positioned over the
+                 * row's right edge. */
+                <li key={it.q} className="group relative">
                   <button
                     type="button"
                     onClick={() => submit(it.q)}
-                    className="w-full flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-[var(--color-surface-2)] text-left"
+                    className="w-full flex items-center gap-3 px-2 py-2 pr-9 rounded-lg hover:bg-[var(--color-surface-2)] text-left"
                   >
                     <Clock className="w-4 h-4 text-[var(--color-ink-4)]" />
                     <span className="flex-1 truncate text-sm text-[var(--color-ink-2)]">{it.q}</span>
-                    <button
-                      type="button"
-                      onClick={(e) => { e.stopPropagation(); history.remove(it.q); }}
-                      className="opacity-0 group-hover:opacity-100 p-1 -m-1 rounded hover:bg-white/60"
-                      aria-label="Убрать"
-                    >
-                      <X className="w-3.5 h-3.5 text-[var(--color-ink-4)]" />
-                    </button>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => history.remove(it.q)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 p-1 -m-1 rounded hover:bg-white/60"
+                    aria-label="Убрать из истории"
+                  >
+                    <X className="w-3.5 h-3.5 text-[var(--color-ink-4)]" />
                   </button>
                 </li>
               ))}
