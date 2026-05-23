@@ -58,18 +58,24 @@ async def test_wb_parses_two_products_skips_priceless() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_wb_handles_429_and_retries() -> None:
+async def test_wb_handles_429_without_retry_and_opens_cooldown() -> None:
     route = respx.get(_SEARCH_URL).mock(
-        side_effect=[
-            httpx.Response(429, text="rate limited"),
-            httpx.Response(200, json=_mock_response_body()),
-        ]
+        return_value=httpx.Response(429, text="rate limited")
     )
-    result = await WildberriesScraper().search(
+    scraper = WildberriesScraper()
+    result = await scraper.search(
         NormalizedQuery(raw="x", normalized="x"), limit=5,
     )
-    assert route.call_count == 2
-    assert len(result.offers) == 1
+    assert route.call_count == 1
+    assert result.offers == []
+    assert result.error is not None
+
+    result = await scraper.search(
+        NormalizedQuery(raw="x", normalized="x"), limit=5,
+    )
+    assert route.call_count == 1
+    assert result.offers == []
+    assert result.error is not None
 
 
 @pytest.mark.asyncio

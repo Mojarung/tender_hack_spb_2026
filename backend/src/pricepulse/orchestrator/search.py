@@ -44,6 +44,13 @@ _CACHE_TTL: dict[SourceKind, int] = {
     SourceKind.RUNET: 15 * 60,
 }
 
+_STALE_CACHE_TTL: dict[SourceKind, int] = {
+    SourceKind.WB: 6 * 60 * 60,
+    SourceKind.OZON: 60 * 60,
+    SourceKind.YA_MARKET: 60 * 60,
+    SourceKind.RUNET: 60 * 60,
+}
+
 
 class SearchOrchestrator:
     """Fan-out to every registered source. One instance per request is fine."""
@@ -81,6 +88,8 @@ class SearchOrchestrator:
             SourceKind.YA_MARKET: settings.yandex_market_rpm,
             SourceKind.RUNET: settings.runet_rpm,
         }
+        self._inflight: dict[str, asyncio.Task[ScrapeResult]] = {}
+        self._inflight_lock = asyncio.Lock()
         # Per-source cascade state — escalates the anti-bot layer after
         # repeated blocks within a window. See antibot/cascade.py.
         self._cascade = cascade or CascadeRouter()
@@ -221,6 +230,56 @@ class SearchOrchestrator:
                         await on_offer(o)
                 return ScrapeResult(source=adapter.source, offers=offers, cached=True)
 
+        async with self._inflight_lock:
+            task = self._inflight.get(cache_key)
+            if task is None:
+                task = asyncio.create_task(
+                    self._fetch_source(adapter, normalized, limit, on_offer, region_id)
+                )
+                self._inflight[cache_key] = task
+                owner = True
+            else:
+                owner = False
+        try:
+            result = await task
+        finally:
+            if owner:
+                async with self._inflight_lock:
+                    self._inflight.pop(cache_key, None)
+        if not owner:
+            return result
+
+        if result.error and adapter.source == SourceKind.WB and self._cache is not None:
+            stale = await self._get_stale_result(cache_key, adapter.source, on_offer)
+            if stale is not None:
+                log.info(
+                    "orchestrator.stale_cache_served",
+                    source=adapter.source.value,
+                    reason=result.error,
+                )
+                return stale
+
+        # Populate cache on success — wrapped because Redis being down
+        # is never a fatal condition for a successful search.
+        if self._cache is not None and result.offers and not result.error:
+            ttl = _CACHE_TTL.get(adapter.source, 3600)
+            stale_ttl = _STALE_CACHE_TTL.get(adapter.source, ttl)
+            payload = {"offers": [o.model_dump(mode="json") for o in result.offers]}
+            try:
+                await self._cache.set(cache_key, payload, ttl_seconds=ttl)
+                await self._cache.set_stale(cache_key, payload, ttl_seconds=stale_ttl)
+            except Exception as exc:
+                log.debug("orchestrator.cache_set_failed", error=str(exc))
+        return result
+
+    async def _fetch_source(
+        self,
+        adapter: ScraperProtocol,
+        normalized: NormalizedQuery,
+        limit: int,
+        on_offer=None,
+        region_id: int = 213,
+    ) -> ScrapeResult:
         # L0 anti-bot — wait for a rate-limit token before hitting the source.
         await self._limiter.acquire(
             adapter.source.value, self._rpm.get(adapter.source, 30),
@@ -279,20 +338,29 @@ class SearchOrchestrator:
                 "orchestrator.source_blocked",
                 source=adapter.source.value, layer=int(layer), error=result.error,
             )
-
-        # Populate cache on success — wrapped because Redis being down
-        # is never a fatal condition for a successful search.
-        if self._cache is not None and result.offers and not result.error:
-            ttl = _CACHE_TTL.get(adapter.source, 3600)
-            try:
-                await self._cache.set(
-                    cache_key,
-                    {"offers": [o.model_dump(mode="json") for o in result.offers]},
-                    ttl_seconds=ttl,
-                )
-            except Exception as exc:
-                log.debug("orchestrator.cache_set_failed", error=str(exc))
         return result
+
+    async def _get_stale_result(
+        self,
+        cache_key: str,
+        source: SourceKind,
+        on_offer=None,
+    ) -> ScrapeResult | None:
+        try:
+            stale = await self._cache.get_stale(cache_key) if self._cache is not None else None
+        except Exception as exc:
+            log.debug("orchestrator.stale_cache_get_failed", error=str(exc))
+            return None
+        if not stale:
+            return None
+        offers = [
+            ProductOffer.model_validate(o).model_copy(update={"cached": True})
+            for o in stale.get("offers", [])
+        ]
+        if on_offer is not None:
+            for offer in offers:
+                await on_offer(offer)
+        return ScrapeResult(source=source, offers=offers, cached=True)
 
 
 _CENTS = Decimal("0.01")

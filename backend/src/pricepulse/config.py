@@ -49,7 +49,10 @@ class Settings(BaseSettings):
     # (e.g. Yandex Browser on the dev machine).
     ozon_browser_path: str = ""
 
-    wb_rpm: int = 60
+    # WB rpm намеренно снижен по результатам experiments/wb_research:
+    # safe-rate probe ловил 429 уже на 6 RPM с одного IP, поэтому
+    # держим бюджет консервативно низким.
+    wb_rpm: int = 6
     ozon_rpm: int = 20
     yandex_market_rpm: int = 10
     runet_rpm: int = 30

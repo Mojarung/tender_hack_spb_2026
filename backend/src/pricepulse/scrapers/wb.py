@@ -8,6 +8,7 @@ back off on 429.
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -16,7 +17,7 @@ import httpx
 import structlog
 from tenacity import (
     AsyncRetrying,
-    retry_if_exception_type,
+    retry_if_exception,
     stop_after_attempt,
     wait_exponential_jitter,
 )
@@ -36,19 +37,11 @@ log = structlog.get_logger(__name__)
 
 _SEARCH_URL = "https://search.wb.ru/exactmatch/ru/common/v18/search"
 _DEFAULT_DEST = "-1257786"          # Moscow region, universal in 2026
+_COOLDOWN_S = 120.0
 
 _HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
-    ),
     "Accept": "*/*",
     "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
-    "Origin": "https://www.wildberries.ru",
-    "Referer": "https://www.wildberries.ru/",
-    "Sec-Fetch-Dest": "empty",
-    "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Site": "cross-site",
 }
 
 
@@ -124,6 +117,19 @@ class WildberriesScraper:
         self._dest = dest
         self._timeout = timeout_s
         self._price_history = price_history
+        self._cooldown_until = 0.0
+
+    def _cooldown_left(self) -> float:
+        return max(0.0, self._cooldown_until - time.monotonic())
+
+    def _open_cooldown(self, response: httpx.Response) -> float:
+        retry_after = response.headers.get("retry-after")
+        try:
+            cooldown_s = max(_COOLDOWN_S, float(retry_after)) if retry_after else _COOLDOWN_S
+        except ValueError:
+            cooldown_s = _COOLDOWN_S
+        self._cooldown_until = time.monotonic() + cooldown_s
+        return cooldown_s
 
     async def search(
         self,
@@ -133,6 +139,13 @@ class WildberriesScraper:
         *,
         region_id: int = 213,
     ) -> ScrapeResult:
+        cooldown_left = self._cooldown_left()
+        if cooldown_left > 0:
+            return ScrapeResult(
+                source=self.source,
+                offers=[],
+                error=f"wb cooldown active for {int(cooldown_left)}s after rate limit",
+            )
         params = _params(query.normalized or query.raw, page=1, dest=self._dest)
 
         async def _fetch() -> httpx.Response:
@@ -143,7 +156,12 @@ class WildberriesScraper:
             ) as client:
                 resp = await client.get(_SEARCH_URL, params=params)
                 if resp.status_code == 429:
-                    raise httpx.HTTPStatusError("rate-limited", request=resp.request, response=resp)
+                    cooldown_s = self._open_cooldown(resp)
+                    raise httpx.HTTPStatusError(
+                        f"rate-limited; cooldown={int(cooldown_s)}s",
+                        request=resp.request,
+                        response=resp,
+                    )
                 resp.raise_for_status()
                 return resp
 
@@ -152,7 +170,12 @@ class WildberriesScraper:
             try:
                 resp = None
                 async for attempt in AsyncRetrying(
-                    retry=retry_if_exception_type(httpx.HTTPStatusError),
+                    retry=retry_if_exception(
+                        lambda exc: (
+                            isinstance(exc, httpx.HTTPStatusError)
+                            and exc.response.status_code != 429
+                        )
+                    ),
                     stop=stop_after_attempt(3),
                     wait=wait_exponential_jitter(initial=1, max=8),
                     reraise=True,

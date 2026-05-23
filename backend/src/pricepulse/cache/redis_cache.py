@@ -22,8 +22,15 @@ class RedisCache:
         raw = await self._redis.get(key)
         return orjson.loads(raw) if raw else None
 
+    async def get_stale(self, key: str) -> dict | list | None:
+        raw = await self._redis.get(f"stale:{key}")
+        return orjson.loads(raw) if raw else None
+
     async def set(self, key: str, value: object, ttl_seconds: int) -> None:
         await self._redis.set(key, orjson.dumps(value, default=str), ex=ttl_seconds)
+
+    async def set_stale(self, key: str, value: object, ttl_seconds: int) -> None:
+        await self._redis.set(f"stale:{key}", orjson.dumps(value, default=str), ex=ttl_seconds)
 
     async def delete(self, key: str) -> None:
         await self._redis.delete(key)

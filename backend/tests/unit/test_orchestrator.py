@@ -14,11 +14,18 @@ from pricepulse.scrapers.base import OnOffer, ScrapeResult
 
 
 class _Stub:
-    def __init__(self, source: SourceKind, *, offers: list[ProductOffer] | None = None,
-                 raises: Exception | None = None):
+    def __init__(
+        self,
+        source: SourceKind,
+        *,
+        offers: list[ProductOffer] | None = None,
+        raises: Exception | None = None,
+        error: str | None = None,
+    ):
         self.source = source
         self._offers = offers or []
         self._raises = raises
+        self._error = error
 
     async def search(
         self, query: NormalizedQuery, limit: int,
@@ -32,7 +39,26 @@ class _Stub:
         if on_offer is not None:
             for o in offers:
                 await on_offer(o)
-        return ScrapeResult(source=self.source, offers=offers)
+        return ScrapeResult(source=self.source, offers=offers, error=self._error)
+
+
+class _Cache:
+    def __init__(self, stale: dict | None = None):
+        self.stale = stale
+        self.set_calls: list[tuple[str, object, int]] = []
+        self.set_stale_calls: list[tuple[str, object, int]] = []
+
+    async def get(self, key: str) -> dict | None:
+        return None
+
+    async def get_stale(self, key: str) -> dict | None:
+        return self.stale
+
+    async def set(self, key: str, value: object, ttl_seconds: int) -> None:
+        self.set_calls.append((key, value, ttl_seconds))
+
+    async def set_stale(self, key: str, value: object, ttl_seconds: int) -> None:
+        self.set_stale_calls.append((key, value, ttl_seconds))
 
 
 def _offer(source: SourceKind, name: str, price: int) -> ProductOffer:
@@ -137,3 +163,22 @@ async def test_runet_empty_stays_empty_without_marketplace_fallback() -> None:
     runet = next(g for g in groups if g.source == SourceKind.RUNET)
     assert runet.count == 0
     assert runet.error is None
+
+
+@pytest.mark.asyncio
+async def test_wb_error_serves_stale_cache() -> None:
+    cached_offer = _offer(SourceKind.WB, "cached-wb", 123)
+    cache = _Cache(stale={"offers": [cached_offer.model_dump(mode="json")]})
+    adapters = {
+        SourceKind.WB: _Stub(SourceKind.WB, error="wb fetch failed: rate-limited"),
+    }
+    orch = SearchOrchestrator(adapters=adapters, cache=cache)
+
+    _, groups, _ = await orch.run("cached", max_per_source=5, sources=[SourceKind.WB])
+
+    group = groups[0]
+    assert group.source == SourceKind.WB
+    assert group.count == 1
+    assert group.offers[0].name == "cached-wb"
+    assert group.offers[0].cached is True
+    assert group.error is None
