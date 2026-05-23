@@ -27,6 +27,18 @@ ui:
 
 # Yandex.Поиск API is explicitly banned by the hackathon methodology
 # (final_presa.pdf p.5), so we keep SearXNG away from Yandex altogether.
+#
+# The default engine pool (Brave/Google/DuckDuckGo/Startpage) rate-limits
+# aggressively — after a handful of queries Brave shows "Suspended: too
+# many requests" and the rest serve CAPTCHA, leaving the 4th source with
+# 0 candidate URLs. Mojeek + Qwant tolerate moderate volume without
+# captcha and round out the candidate pool when the others sleep it off.
 engines:
   - name: yandex
     disabled: true
+  - name: mojeek
+    disabled: false
+  - name: qwant
+    disabled: false
+  - name: presearch
+    disabled: false
