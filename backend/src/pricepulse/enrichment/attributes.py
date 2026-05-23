@@ -4,8 +4,6 @@ This module is intentionally deterministic and lightweight. Local LLMs can be
 added as a fallback later, but the default path must work without model files.
 """
 
-# ruff: noqa: RUF001
-
 from __future__ import annotations
 
 import re
@@ -200,6 +198,8 @@ def _text_blob(text: str, characteristics: dict[str, str]) -> str:
 def _detect_category(cleaned: str, tokens: set[str]) -> str | None:
     if tokens & _ACCESSORY_WORDS:
         return "accessory"
+    if "колесо в сборе" in cleaned or "колеса в сборе" in cleaned:
+        return "wheel_assembly"
     if _TYRE_RE.search(cleaned) or tokens & {"шина", "шины", "резина", "покрышка"}:
         return "tyre"
     if tokens & {"принтер", "мфу", "сканер", "копир", "плоттер"}:
@@ -453,7 +453,7 @@ def extract_attributes(
         values["brand"] = values["brand"] or "xiaomi"
         values["category"] = values["category"] or "smartphone"
 
-    _STRUCTURED_PRIORITY = {
+    structured_priority = {
         "storage_gb", "ram_gb", "color", "brand", "season", "studs",
         "wifi", "color_print", "print_technology", "device_type",
         "density_gm2", "sheets_count", "paper_format",
@@ -461,7 +461,7 @@ def extract_attributes(
         "gender", "material", "size",
     }
     for field, val in structured.items():
-        if field in _STRUCTURED_PRIORITY or values.get(field) in (None, ""):
+        if field in structured_priority or values.get(field) in (None, ""):
             values[field] = val
 
     category = values.get("category")
@@ -691,9 +691,18 @@ def relevance_breakdown(
             unknown.append(field)
             accrued += weight * 0.45
             continue
-        if ov == qv or (field == "model" and _model_prefix_compatible(str(qv), str(ov))):
+        if ov == qv:
             matched.append(field)
             accrued += weight
+        elif field == "model" and _model_prefix_compatible(str(qv), str(ov)):
+            # Prefix match: offer model has extra variant tokens (e.g. "iphone 15 pro"
+            # vs query "iphone 15"). Compatible but not exact — partial credit so
+            # the exact variant ranks above the extended one.
+            ta = _tokenize_model(str(qv))
+            tb = _tokenize_model(str(ov))
+            credit = 0.8 if len(tb) > len(ta) else 1.0
+            matched.append(field)
+            accrued += weight * credit
         elif field in _SOFT_MISMATCH_FIELDS:
             mismatched.append(field)
             accrued += weight * 0.10
