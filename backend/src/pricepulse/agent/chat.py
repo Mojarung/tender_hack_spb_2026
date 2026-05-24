@@ -21,8 +21,8 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
 import structlog
+from ollama import AsyncClient
 from redis.asyncio import Redis
 
 from pricepulse.agent import tools
@@ -202,17 +202,18 @@ class ChatEngine:
     def __init__(self, redis: Redis | None = None) -> None:
         self._redis = redis
         settings = get_settings()
-        self._url = settings.ollama_url.rstrip("/") + "/api/chat"
         # Gemma 4 is multimodal — same model handles text chat, vision
         # (image-to-query) and tool-calling. Keeping chat on it means
         # one model warm in the cloud account instead of two.
         self._model = settings.ollama_vision_model or settings.ollama_text_model
-        # Cloud Ollama (ollama.com) requires Bearer auth on every
-        # request — without this the engine 401s and the chat widget
-        # surfaces "502 chat engine failed: 401 …".
-        self._headers: dict[str, str] = {}
+        # Use the ollama-python library's AsyncClient — it routes
+        # cloud (ollama.com) and local (http://ollama:11434) endpoints
+        # correctly, handles auth, retries, and chunked responses.
+        # Doing this via raw httpx ended in 404 / 401 against the cloud.
+        headers: dict[str, str] = {}
         if settings.ollama_api_key:
-            self._headers["Authorization"] = f"Bearer {settings.ollama_api_key}"
+            headers["Authorization"] = f"Bearer {settings.ollama_api_key}"
+        self._client = AsyncClient(host=settings.ollama_url, headers=headers)
 
     async def _load_history(self, session_id: str | None) -> list[ChatMessage]:
         if not session_id or self._redis is None:
@@ -247,43 +248,39 @@ class ChatEngine:
         tool_log: list[dict] = []
         tool_specs = [_tool_spec_for_ollama(t) for t in TOOLS.values()]
 
-        async with httpx.AsyncClient(timeout=120, headers=self._headers) as client:
-            for round_idx in range(max_tool_rounds + 1):
-                payload = {
-                    "model": self._model,
-                    "messages": [m.to_ollama() for m in history],
-                    "tools": tool_specs,
-                    "stream": False,
-                    "options": {"temperature": 0.2},
+        for round_idx in range(max_tool_rounds + 1):
+            response = await self._client.chat(
+                model=self._model,
+                messages=[m.to_ollama() for m in history],
+                tools=tool_specs,
+                stream=False,
+                options={"temperature": 0.2, "think": False},
+            )
+            msg = response.get("message") or {}
+            tool_calls = msg.get("tool_calls") or []
+            content = msg.get("content") or ""
+
+            if not tool_calls:
+                history.append(ChatMessage("assistant", content))
+                await self._save_history(session_id, history)
+                return {
+                    "reply": content,
+                    "tool_calls": tool_log,
+                    "rounds": round_idx,
+                    "history_len": len(history),
                 }
-                resp = await client.post(self._url, json=payload)
-                resp.raise_for_status()
-                body = resp.json()
-                msg = body.get("message") or {}
-                tool_calls = msg.get("tool_calls") or []
-                content = msg.get("content") or ""
 
-                if not tool_calls:
-                    history.append(ChatMessage("assistant", content))
-                    await self._save_history(session_id, history)
-                    return {
-                        "reply": content,
-                        "tool_calls": tool_log,
-                        "rounds": round_idx,
-                        "history_len": len(history),
-                    }
-
-                # Assistant requested tools — record + dispatch in parallel.
-                history.append(ChatMessage("assistant", content, tool_calls=tool_calls))
-                results = await asyncio.gather(*[_dispatch_tool_call(c) for c in tool_calls])
-                for call, result in zip(tool_calls, results, strict=True):
-                    name = (call.get("function") or {}).get("name", "")
-                    tool_log.append({"name": name, "result_keys": _peek_keys(result)})
-                    history.append(ChatMessage(
-                        role="tool",
-                        content=json.dumps(result, ensure_ascii=False, default=str)[:8000],
-                        tool_name=name,
-                    ))
+            # Assistant requested tools — record + dispatch in parallel.
+            history.append(ChatMessage("assistant", content, tool_calls=tool_calls))
+            results = await asyncio.gather(*[_dispatch_tool_call(c) for c in tool_calls])
+            for call, result in zip(tool_calls, results, strict=True):
+                name = (call.get("function") or {}).get("name", "")
+                tool_log.append({"name": name, "result_keys": _peek_keys(result)})
+                history.append(ChatMessage(
+                    role="tool",
+                    content=json.dumps(result, ensure_ascii=False, default=str)[:8000],
+                    tool_name=name,
+                ))
         # Hit the round cap without a free-text answer
         history.append(ChatMessage("assistant", "(no further response after tool rounds)"))
         await self._save_history(session_id, history)
