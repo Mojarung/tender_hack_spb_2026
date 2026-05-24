@@ -1,7 +1,8 @@
 "use client";
 
+import clsx from "clsx";
 import { motion } from "framer-motion";
-import { CornerDownLeft, SearchX } from "lucide-react";
+import { CornerDownLeft, Download, SearchX } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
@@ -620,18 +621,21 @@ function SearchInner() {
               const displayedQuery = liveCorrection?.to ?? q;
               return <h1 className="text-2xl font-semibold tracking-tight">Результаты по «{displayedQuery}»</h1>;
             })()}
-            <label className="text-xs text-[var(--color-ink-4)] flex items-center gap-2 mt-1.5">
-              Сортировка:
-              <select
-                value={sort}
-                onChange={(e) => setSort(e.target.value as SortMode)}
-                className="bg-white border border-[var(--color-line)] rounded-full text-sm text-[var(--color-ink-2)] px-3 py-1 focus:outline-none focus:border-[var(--color-accent)]"
-              >
-                {(Object.keys(SORT_LABEL) as SortMode[]).map((m) => (
-                  <option key={m} value={m}>{SORT_LABEL[m]}</option>
-                ))}
-              </select>
-            </label>
+            <div className="flex items-center gap-3 mt-1.5 flex-wrap">
+              <NmckExportButton query={q} regionId={region.id} disabled={loading || all.length < 3} />
+              <label className="text-xs text-[var(--color-ink-4)] flex items-center gap-2">
+                Сортировка:
+                <select
+                  value={sort}
+                  onChange={(e) => setSort(e.target.value as SortMode)}
+                  className="bg-white border border-[var(--color-line)] rounded-full text-sm text-[var(--color-ink-2)] px-3 py-1 focus:outline-none focus:border-[var(--color-accent)]"
+                >
+                  {(Object.keys(SORT_LABEL) as SortMode[]).map((m) => (
+                    <option key={m} value={m}>{SORT_LABEL[m]}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
           </div>
           <p className="text-sm text-[var(--color-ink-4)] mt-1">
             {loading
@@ -760,6 +764,54 @@ function EmptyState({ query }: { query: string }) {
         формулировку. Попробуйте короче или с другими словами.
       </p>
     </motion.div>
+  );
+}
+
+/** «Скачать обоснование НМЦК» — single-click 44-ФЗ Приложение №1.
+ *  Triggers /api/v1/nmck/export, which re-runs the search through the
+ *  orchestrator (hitting the per-region cache) and renders an Excel
+ *  workbook with three+ КП, mean/σ/V statistics, and the final НМЦК. */
+function NmckExportButton({
+  query, regionId, disabled,
+}: {
+  query: string;
+  regionId: number;
+  disabled: boolean;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  async function onClick() {
+    setBusy(true); setErr(null);
+    try {
+      await api.nmckExport(query, { region_id: regionId, max_per_source: 10 });
+    } catch (e) {
+      setErr(e instanceof Error ? e.message.slice(0, 80) : "не вышло");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="flex items-center gap-1.5">
+      <button
+        type="button"
+        disabled={disabled || busy}
+        onClick={onClick}
+        title="Сгенерировать обоснование НМЦК по 44-ФЗ (Приложение №1)"
+        className={clsx(
+          "inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full transition-colors",
+          "bg-[var(--color-accent-50)] text-[var(--color-accent-2)] hover:bg-[var(--color-accent-100)]",
+          "disabled:opacity-40 disabled:cursor-not-allowed",
+        )}
+      >
+        <Download className="w-3.5 h-3.5" />
+        {busy ? "Готовим…" : "НМЦК · Excel"}
+      </button>
+      {err && (
+        <span className="text-[11px] text-[var(--color-bad)] max-w-[200px] truncate" title={err}>
+          {err}
+        </span>
+      )}
+    </div>
   );
 }
 

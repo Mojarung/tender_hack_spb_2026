@@ -213,4 +213,36 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ query, title, seller: seller ?? null }),
     }),
+
+  /** Run a search and download the result as a 44-ФЗ Приложение №1 Excel.
+   *  Backend re-fetches via the orchestrator (uses cache), assembles the
+   *  workbook, returns it as a blob. We trigger the browser download here. */
+  nmckExport: async (
+    query: string,
+    opts: { max_per_source?: number; region_id?: number; quantity?: number } = {},
+  ) => {
+    const res = await fetch(`${BASE}/api/v1/nmck/export`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query,
+        max_per_source: opts.max_per_source ?? 10,
+        region_id: opts.region_id ?? DEFAULT_REGION_ID,
+        quantity: opts.quantity ?? 1,
+      }),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error(txt || `${res.status} ${res.statusText}`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `НМЦК_${query.slice(0, 60).replace(/\s+/g, "_")}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  },
 };
