@@ -9,7 +9,7 @@ import toast from "react-hot-toast";
 import { ProductDetailModal } from "@/components/ProductDetailModal";
 import { api, getToken, proxyImage } from "@/lib/api";
 import { formatPrice, itemIdFromOffer } from "@/lib/format";
-import { SOURCE_LABEL, type ProductOffer } from "@/lib/types";
+import { SOURCE_LABEL, type ProductOffer, type RankedOffer } from "@/lib/types";
 
 const sourceClass: Record<string, string> = {
   wb: "source-dot-wb",
@@ -63,9 +63,24 @@ interface Props {
   offer: ProductOffer;
   index?: number;
   highlight?: boolean;   // best deal accent
+  ranked?: RankedOffer;  // relevance badge data
 }
 
-export function ProductCard({ offer, index = 0, highlight }: Props) {
+function relevanceMeta(ranked: RankedOffer): { pct: number; label: string; colorClass: string } {
+  const pct = ranked.relevance_percent ?? Math.round((ranked.relevance_score ?? 0) * 100);
+  const reason = ranked.selection_reasons?.[0] ?? null;
+  const matched = ranked.match_signals ?? [];
+  const label = reason ?? (matched.length ? `Совпало: ${matched.slice(0, 2).join(", ")}` : "");
+  const colorClass =
+    pct >= 80
+      ? "text-[var(--color-good)] bg-[var(--color-good)]/10 border-[var(--color-good)]/20"
+      : pct >= 55
+      ? "text-[var(--color-warn)] bg-[var(--color-warn)]/10 border-[var(--color-warn)]/20"
+      : "text-[var(--color-ink-4)] bg-[var(--color-surface-2)] border-[var(--color-line)]";
+  return { pct, label, colorClass };
+}
+
+export function ProductCard({ offer, index = 0, highlight, ranked }: Props) {
   const [fav, setFav] = useState(false);
   const [busy, setBusy] = useState(false);
   const [imgFailed, setImgFailed] = useState(false);
@@ -78,6 +93,7 @@ export function ProductCard({ offer, index = 0, highlight }: Props) {
       : offer.characteristics?.feedbacks;
   const chips = attributeChips(offer);
   const delivery = deliveryText(offer);
+  const rel = ranked ? relevanceMeta(ranked) : null;
 
   async function toggleFav(e: React.MouseEvent) {
     e.preventDefault();
@@ -121,11 +137,24 @@ export function ProductCard({ offer, index = 0, highlight }: Props) {
           highlight && "ring-1 ring-[var(--color-accent-100)]"
         )}
       >
-        {/* Source + favorite */}
+        {/* Source + relevance badge + favorite */}
         <div className="flex items-center justify-between">
-          <div className="chip">
-            <span className={clsx("source-dot", sourceClass[offer.source])} />
-            {SOURCE_LABEL[offer.source]}
+          <div className="flex items-center gap-1.5">
+            <div className="chip">
+              <span className={clsx("source-dot", sourceClass[offer.source])} />
+              {SOURCE_LABEL[offer.source]}
+            </div>
+            {rel && (
+              <span
+                title={rel.label || undefined}
+                className={clsx(
+                  "inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold border",
+                  rel.colorClass
+                )}
+              >
+                {rel.pct}%
+              </span>
+            )}
           </div>
           <button
             type="button"
@@ -171,6 +200,11 @@ export function ProductCard({ offer, index = 0, highlight }: Props) {
               </span>
             ))}
           </div>
+        )}
+        {rel?.label && (
+          <p className="text-[10px] leading-tight text-[var(--color-ink-4)] truncate mt-1">
+            {rel.label}
+          </p>
         )}
         {delivery && (
           <div className="mt-2 inline-flex items-center gap-1 text-[11px] text-[var(--color-ink-4)]">

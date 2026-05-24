@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { CornerDownLeft, SearchX } from "lucide-react";
+import { AlertTriangle, CheckCircle2, CornerDownLeft, SearchX, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
@@ -13,7 +13,7 @@ import { api } from "@/lib/api";
 import { formatPrice } from "@/lib/format";
 import { DEFAULT_REGION_ID, getRegion } from "@/lib/regions";
 import {
-  SOURCE_LABEL, type ProductOffer, type SearchResponse,
+  SOURCE_LABEL, type ProductOffer, type RankedOffer, type SearchResponse,
   type Source, type SourceGroup, type QueryClarification, type ClarificationOption
 } from "@/lib/types";
 
@@ -39,6 +39,12 @@ function parseFirstNumber(raw: string): number | null {
   if (!m) return null;
   const n = Number(m[0].replace(",", "."));
   return Number.isFinite(n) ? n : null;
+}
+
+function scoreTone(percent: number): string {
+  if (percent >= 85) return "text-emerald-700 bg-emerald-50 border-emerald-200";
+  if (percent >= 60) return "text-amber-700 bg-amber-50 border-amber-200";
+  return "text-rose-700 bg-rose-50 border-rose-200";
 }
 
 type SortMode = "price_asc" | "price_desc" | "reviews_desc" | "reviews_asc";
@@ -262,6 +268,7 @@ function SearchInner() {
   // event so the user sees the canonical query immediately, not after `done`.
   // URL canonicalization still happens on `done` (so the stream isn't aborted).
   const [liveCorrection, setLiveCorrection] = useState<{ from: string; to: string } | null>(null);
+  const [rankedByUrl, setRankedByUrl] = useState<Map<string, RankedOffer>>(() => new Map());
 
   /** When we replace the URL to the corrected query, the effect re-fires
    *  for the new `q`. The next run reuses the data already in state and
@@ -293,7 +300,7 @@ function SearchInner() {
       query: { raw: q, normalized: q, expansions: [] },
       groups: [], top_deals: [], took_ms: 0, partial: true,
     });
-    setErr(null); setLoading(true); setLiveCorrection(null); setClarification(null);
+    setErr(null); setLoading(true); setLiveCorrection(null); setClarification(null); setRankedByUrl(new Map());
     // New query ⇒ stale filters would silently hide unrelated brands/sources.
     setSourceFilter(new Set());
     setStringFilters({});
@@ -374,6 +381,11 @@ function SearchInner() {
         onTopDeals: (e) => {
           if (cancelled) return;
           setData((d) => d ? { ...d, top_deals: e.top_deals } : d);
+          const map = new Map<string, RankedOffer>();
+          for (const rd of e.top_deals) {
+            map.set(rd.offer.url, rd);
+          }
+          setRankedByUrl(map);
         },
         onDone: (e) => {
           if (cancelled) return;
@@ -533,26 +545,33 @@ function SearchInner() {
               <div className="text-[11px] uppercase tracking-wider text-[var(--color-ink-4)] mb-3">Лучшие сделки</div>
               <ol className="space-y-3">
                 {data.top_deals.slice(0, 3).map((d) => {
-                  const rel = d.relevance_score ?? null;
-                  const relPct = rel !== null ? Math.round(rel * 100) : null;
+                  const relPct = d.relevance_percent ?? (
+                    d.relevance_score != null ? Math.round(d.relevance_score * 100) : null
+                  );
+                  const reasons = d.selection_reasons ?? [];
                   return (
-                    <li key={d.rank} className="text-sm">
-                      <div className="flex items-start gap-2">
+                    <li key={d.rank} className="text-sm rounded-lg border border-[var(--color-line)] bg-white/70 p-2.5">
+                      <div className="flex items-start gap-2.5">
                         <span className="w-6 h-6 shrink-0 rounded-full bg-[var(--color-accent-50)] text-[var(--color-accent-2)] grid place-items-center text-[11px] font-bold">{d.rank}</span>
                         <a
                           href={d.offer.url}
                           target="_blank"
                           rel="noreferrer"
-                          className="flex-1 truncate text-[var(--color-ink-2)] hover:text-[var(--color-accent-2)]"
+                          className="flex-1 truncate text-[var(--color-ink-2)] hover:text-[var(--color-accent-2)] font-medium"
                           title={d.offer.name}
                         >
                           {d.offer.name}
                         </a>
                       </div>
-                      <div className="mt-1 ml-8 flex flex-wrap items-center gap-1 text-[10px] leading-tight">
+                      <div className="mt-1 ml-8 flex items-center gap-1.5 text-[11px] text-[var(--color-ink-4)]">
+                        <span>{SOURCE_LABEL[d.offer.source]}</span>
+                        <span>·</span>
+                        <span className="tabular-nums">{formatPrice(d.offer.price, d.offer.currency)}</span>
+                      </div>
+                      <div className="mt-2 ml-8 space-y-1">
                         {relPct !== null && (
                           <span
-                            className={`px-1.5 py-0.5 rounded font-medium ${
+                            className={`inline-flex w-fit rounded-md border px-2 py-1 text-[12px] font-semibold tabular-nums ${scoreTone(relPct)} ${
                               relPct >= 85
                                 ? "bg-green-100 text-green-800"
                                 : relPct >= 60
@@ -564,17 +583,29 @@ function SearchInner() {
                             {relPct}%
                           </span>
                         )}
-                        {(d.match_signals ?? []).map((s) => (
+                        {reasons.slice(0, 2).map((reason) => (
+                          <div key={reason} className="flex items-start gap-1.5 text-[11px] leading-snug text-[var(--color-ink-3)]">
+                            <CheckCircle2 className="w-3.5 h-3.5 mt-0.5 shrink-0 text-emerald-600" />
+                            <span>{reason}</span>
+                          </div>
+                        ))}
+                        {d.rerank_score != null && (
+                          <div className="flex items-center gap-1.5 text-[11px] leading-snug text-[var(--color-ink-4)]">
+                            <Sparkles className="w-3.5 h-3.5 shrink-0 text-[var(--color-accent)]" />
+                            <span>Реранкер: {Math.round(d.rerank_score * 100)}%</span>
+                          </div>
+                        )}
+                        {reasons.length === 0 && (d.match_signals ?? []).slice(0, 3).map((s) => (
                           <span key={`m-${s}`} className="px-1.5 py-0.5 rounded bg-green-50 text-green-700 border border-green-200">
                             ✓ {s}
                           </span>
                         ))}
-                        {(d.mismatch_signals ?? []).map((s) => (
+                        {reasons.length === 0 && (d.mismatch_signals ?? []).slice(0, 2).map((s) => (
                           <span key={`x-${s}`} className="px-1.5 py-0.5 rounded bg-red-50 text-red-700 border border-red-200">
                             ✗ {s}
                           </span>
                         ))}
-                        {(d.unknown_signals ?? []).map((s) => (
+                        {reasons.length === 0 && (d.unknown_signals ?? []).slice(0, 2).map((s) => (
                           <span key={`u-${s}`} className="px-1.5 py-0.5 rounded bg-gray-50 text-gray-600 border border-gray-200">
                             ? {s}
                           </span>
@@ -756,7 +787,12 @@ function SearchInner() {
           <>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mt-6">
               {offers.map((o, i) => (
-                <ProductCard key={`${o.source}-${o.url}-${i}`} offer={o} index={i} />
+                <ProductCard
+                  key={`${o.source}-${o.url}-${i}`}
+                  offer={o}
+                  index={i}
+                  ranked={rankedByUrl.get(o.url)}
+                />
               ))}
             </div>
             {loading && (

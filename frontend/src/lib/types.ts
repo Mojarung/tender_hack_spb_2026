@@ -91,6 +91,9 @@ export interface RankedOffer {
   rank: number;
   deal_score?: number;
   relevance_score?: number;
+  relevance_percent?: number;
+  rerank_score?: number | null;
+  selection_reasons?: string[];
   match_signals?: string[];
   mismatch_signals?: string[];
   unknown_signals?: string[];
