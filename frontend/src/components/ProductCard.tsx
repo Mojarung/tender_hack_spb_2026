@@ -6,6 +6,7 @@ import { Eye, Heart, Star } from "lucide-react";
 import { useState } from "react";
 import toast from "react-hot-toast";
 
+import { PriceSparkline } from "@/components/PriceSparkline";
 import { ProductDetailModal } from "@/components/ProductDetailModal";
 import { api, getToken, proxyImage } from "@/lib/api";
 import { formatPrice, itemIdFromOffer } from "@/lib/format";
@@ -163,12 +164,15 @@ export function ProductCard({ offer, index = 0, highlight, query, allOffers, gro
           </div>
         </div>
 
-        {/* Price + CTA */}
-        <div className="flex items-end justify-between pt-1">
-          <div className="text-lg font-semibold tabular-nums">
-            {formatPrice(offer.price, offer.currency)}
+        {/* Price + sparkline + CTA */}
+        <div className="flex items-end justify-between pt-1 gap-2">
+          <div className="min-w-0">
+            <div className="text-lg font-semibold tabular-nums">
+              {formatPrice(offer.price, offer.currency)}
+            </div>
+            <PriceSparkline offer={offer} />
           </div>
-          <span className="text-xs text-[var(--color-ink-4)] inline-flex items-center gap-1 group-hover:text-[var(--color-ink-2)] transition-colors">
+          <span className="text-xs text-[var(--color-ink-4)] inline-flex items-center gap-1 group-hover:text-[var(--color-ink-2)] transition-colors shrink-0">
             Подробнее <Eye className="w-3 h-3" />
           </span>
         </div>

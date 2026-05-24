@@ -214,6 +214,15 @@ export const api = {
       body: JSON.stringify({ query, title, seller: seller ?? null }),
     }),
 
+  /** Price history points for a given offer (latest first). Empty list
+   *  when nothing is captured yet — the sparkline degrades to a single
+   *  dot in that case. */
+  priceHistory: (source: string, itemId: string, limit = 60) =>
+    http<{ source: string; item_id: string; count: number;
+           points: { ts: string; price: string }[] }>(
+      `/api/v1/price-history/${source}/${encodeURIComponent(itemId)}?limit=${limit}`,
+    ),
+
   /** Stream an AI-generated "why this is a good deal" explanation. Returns
    *  a callable that yields fragments; close() aborts the request. Falls
    *  back to a static summary if Ollama is down. */
