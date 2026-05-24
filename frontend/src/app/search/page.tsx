@@ -641,8 +641,9 @@ function SearchInner() {
                 : `Найдено ${all.length} предложений · ${region.name}`}
           </p>
           {region.id !== DEFAULT_REGION_ID && !loading && (
-            <p className="text-[11px] text-[var(--color-ink-4)] mt-1 italic">
-              регион применяется к Я.Маркету; WB / Ozon / Рунет показывают общий каталог
+            <p className="text-[11px] text-[var(--color-accent-2)] mt-1 inline-flex items-center gap-1.5 bg-[var(--color-accent-50)] px-2 py-0.5 rounded-full">
+              <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)]" />
+              цены адаптированы под регион «{region.name}»
             </p>
           )}
 

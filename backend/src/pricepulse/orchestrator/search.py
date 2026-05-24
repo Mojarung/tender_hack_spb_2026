@@ -17,6 +17,7 @@ from typing import Any
 
 import structlog
 
+from pricepulse.analytics.regional_pricing import adjust_offer_for_region
 from pricepulse.analytics.scoring import best_deal_score
 from pricepulse.antibot.cascade import CascadeRouter
 from pricepulse.antibot.ratelimit import RateLimiter
@@ -305,11 +306,21 @@ class SearchOrchestrator:
             adapter.source.value, self._rpm.get(adapter.source, 30),
         )
 
+        # Regional pricing — WB/Ozon ignore our region_id, so we transform
+        # the prices ourselves to give the demo regional realism. Wrap the
+        # on_offer callback so SSE chunks carry the adjusted price the very
+        # first time the frontend sees them (no flicker on finalize).
+        wrapped_on_offer = on_offer
+        if region_id != 213 and on_offer is not None:
+            async def _adjusted(offer: ProductOffer, _cb=on_offer) -> None:
+                await _cb(adjust_offer_for_region(offer, region_id))
+            wrapped_on_offer = _adjusted
+
         try:
             result = await adapter.search(
                 normalized,
                 limit=limit,
-                on_offer=on_offer,
+                on_offer=wrapped_on_offer,
                 region_id=region_id,
             )
         except Exception as exc:  # never propagate — isolate sources
@@ -348,6 +359,18 @@ class SearchOrchestrator:
             else:
                 if alt_result.offers:
                     result = alt_result
+
+        # Regional pricing — apply to the finalised offer list so the
+        # cached group payload + min/avg/median stats use the adjusted
+        # prices. on_offer callback was already wrapped above, so the
+        # SSE stream and this list converge on the same numbers.
+        if region_id != 213 and result.offers:
+            result = ScrapeResult(
+                source=result.source,
+                offers=[adjust_offer_for_region(o, region_id) for o in result.offers],
+                error=result.error,
+                cached=result.cached,
+            )
 
         # Feed the cascade router — repeated blocks escalate the anti-bot layer.
         layer = self._cascade.layer_for(adapter.source)
