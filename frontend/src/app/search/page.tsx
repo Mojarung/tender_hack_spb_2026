@@ -407,6 +407,27 @@ function SearchInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, nofix, region.id]);
 
+  // Track whether we already seeded the sliders for THIS query — fires
+  // exactly once per search, on the transition from loading → done.
+  const seededForQueryRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (loading || !data) return;
+    if (seededForQueryRef.current === q) return;
+    seededForQueryRef.current = q;
+    // Use the latest data — recompute facets so we see all offers, not
+    // a stale snapshot.
+    const allOffers = data.groups.flatMap((g) => g.offers);
+    const finalFacets = buildFacets(allOffers);
+    setNumericRanges((prev) => {
+      const next: Record<string, [number, number]> = { ...prev };
+      for (const f of finalFacets) {
+        if (f.kind !== "numeric") continue;
+        if (!next[f.key]) next[f.key] = [f.min, f.max];
+      }
+      return next;
+    });
+  }, [loading, data, q]);
+
   if (!q) {
     return (
       <div className="card p-12 text-center">
@@ -424,27 +445,6 @@ function SearchInner() {
 
   // Detect facets from current set. Cheap, runs every render.
   const facets = buildFacets(all);
-
-  // Auto-init numeric ranges. While the stream is live, KEEP IT SIMPLE:
-  // mirror the current facet bounds into numericRanges so a late offer
-  // (e.g. Ozon's 46k after WB's 49k) doesn't fall outside the slider and
-  // disappear from the grid. Once `done` arrives (loading=false), we stop
-  // touching the slider so the user can drag freely.
-  for (const f of facets) {
-    if (f.kind !== "numeric") continue;
-    queueMicrotask(() => {
-      setNumericRanges((prev) => {
-        const cur = prev[f.key];
-        if (loading || !cur) {
-          // No prev value OR streaming → sync to current bounds.
-          if (cur && cur[0] === f.min && cur[1] === f.max) return prev;
-          return { ...prev, [f.key]: [f.min, f.max] };
-        }
-        // After stream is done, never override — user is in charge.
-        return prev;
-      });
-    });
-  }
 
   // Apply all filters. Missing values are NEVER filter-out — they pass
   // through so a price-only filter doesn't hide products without brand etc.
