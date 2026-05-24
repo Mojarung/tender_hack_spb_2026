@@ -229,3 +229,9 @@ frontend-home-*.png
 # Frontend lib/ is source code, not a Python venv
 !frontend/src/lib/
 !frontend/src/lib/**
+
+# Browser profile dirs created by the research sandboxes (huge, Chrome
+# Cache + Extensions etc.) — same convention as backend/var/profiles.
+ozon_research/.profile_ozon/
+wb_research/.profile_wb/
+runet_research/.profile_yandex/

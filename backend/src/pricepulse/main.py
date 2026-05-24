@@ -19,6 +19,7 @@ from prometheus_fastapi_instrumentator import Instrumentator, metrics
 
 from pricepulse.antibot.browser_pool import close_browser_pool
 from pricepulse.antibot.wb_browser import close_wb_browser
+from pricepulse.antibot.yandex_browser import close_yandex_browser
 from pricepulse.api.cache import close_rate_limiter, close_search_cache
 from pricepulse.api.routes import (
     chat,
@@ -58,6 +59,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from pricepulse.antibot.browser_pool import get_browser_pool
     from pricepulse.antibot.browser_fetch import get_ozon_cookie_warmer
     from pricepulse.antibot.wb_browser import get_wb_browser
+    from pricepulse.antibot.yandex_browser import get_yandex_browser
     import structlog as _structlog
     _log = _structlog.get_logger(__name__)
 
@@ -72,6 +74,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await wb._ensure_started()    # type: ignore[attr-defined]
     except Exception as exc:
         _log.warning("wb_browser_prewarm_failed", error=repr(exc), exc_info=True)
+    try:
+        yandex = await get_yandex_browser()
+        await yandex._ensure_started()    # type: ignore[attr-defined]
+    except Exception as exc:
+        _log.warning("yandex_browser_prewarm_failed", error=repr(exc), exc_info=True)
 
     # Pre-warm Ozon cookies right after browser launch so the first real
     # search request hits L1 immediately instead of paying 8 s warm-up.
@@ -87,6 +94,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await close_rate_limiter()
     await close_browser_pool()
     await close_wb_browser()
+    await close_yandex_browser()
 
 
 def _instrument(app: FastAPI) -> None:

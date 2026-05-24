@@ -1,0 +1,71 @@
+[
+  {
+    "title": "Чехлы для iPhone 15 Casual с доставкой по России",
+    "url": "https://vsemayki.ru",
+    "rating": 4.7,
+    "reviews_count": null,
+    "has_cart": true,
+    "shop": "vsemayki.ru",
+    "enrich_error": "no jsonld product"
+  },
+  {
+    "title": "Купить телефон, смартфон iPhone 15 Apple по... | Авито",
+    "url": "https://www.avito.ru/all/telefony/mobilnye_telefony/apple/iphone_15-ASgBAgICA0SywA2SoO0RtMANzqs5sMENiPw3",
+    "rating": 4.2,
+    "reviews_count": 98400,
+    "has_cart": true,
+    "shop": "avito.ru",
+    "enrich_error": "http 403"
+  },
+  {
+    "title": "Смартфоны Apple iPhone 15 (Эпл Айфон 15) купить...",
+    "url": "https://www.dns-shop.ru/catalog/recipe/7b7e92879cac467a/apple-iphone-15/",
+    "rating": 4.5,
+    "reviews_count": 212000,
+    "has_cart": true,
+    "shop": "dns-shop.ru",
+    "enrich_error": "http 401"
+  },
+  {
+    "title": "Смартфон Apple iPhone 15 128 ГБ черный купить в Казани...",
+    "url": "https://kzn.stores-apple.com/catalog/apple-iphone-15-128-gb-black/",
+    "rating": 4.8,
+    "reviews_count": 9000,
+    "has_cart": true,
+    "shop": "kzn.stores-apple.com",
+    "enrich_error": "no jsonld product"
+  },
+  {
+    "title": "iPhone 15 128GB - купить, цена на оригинальные Айфон...",
+    "url": "https://re-store.ru/smartfony/apple/iphone-15/hdd_128gb/",
+    "rating": 4.5,
+    "reviews_count": 5100,
+    "has_cart": true,
+    "shop": "re-store.ru",
+    "name": "iPhone 15 128GB",
+    "price": "62990",
+    "enrich_ok": true
+  },
+  {
+    "title": "Apple iPhone 15 128 Гб - купить в Ситилинк",
+    "url": "https://www.citilink.ru/catalog/smartfony/APPLE--iphone-15-128-gb/",
+    "rating": 4.3,
+    "reviews_count": 61900,
+    "has_cart": true,
+    "shop": "citilink.ru",
+    "enrich_error": "http 429"
+  },
+  {
+    "title": "iPhone 15 купить в Москве или с доставкой по всей России...",
+    "url": "https://biggeek.ru/catalog/apple-iphone-15",
+    "rating": 4.7,
+    "reviews_count": 3100,
+    "has_cart": true,
+    "shop": "biggeek.ru",
+    "name": "iPhone 15",
+    "price": "45990",
+    "image": "https://images.biggeek.ru/1/424/784b/22652-687Grey@2x.jpg",
+    "description": "<p>Осенью 2023 года компания Apple представила iPhone 15, который получил множество приятных нововведений и станет отличным вариантом для апгрейда даже для тех, кто долго ждал подходящего обновления. Динамический остров, более мощный процессор, 48-Мегапиксельная камера и обновлённый дизайн, а также USB-C и всё это в сочетании с отличной автономностью.</p>\r\n\r\n<p>Основная камера порадует не только высоким разрешением, но и функцией двукратного зума без потери качества, которая отчасти заменят отде",
+    "enrich_ok": true
+  }
+]

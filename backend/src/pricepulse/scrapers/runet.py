@@ -1,25 +1,25 @@
-"""4th source — non-formalised Runet, on our own infrastructure.
+"""4th source — Runet via Yandex SERP scraping.
 
-External search-engine APIs (Яндекс.Поиск, Google, Bing) are explicitly
-banned by the methodology (final_presa.pdf, p.5), and so are external
-scraping services (Firecrawl cloud, Scrapfly, etc.). The 4th source
-therefore stands on tools we run ourselves:
+Pipeline per query:
+  1. Open ``yandex.ru/search/?text=<q>`` in a persistent stealth
+     browser (``antibot/yandex_browser.py``). Run an in-page extractor
+     that pulls organic results Yandex itself flagged as e-commerce
+     (cart icon, inline rating block). The browser stays alive between
+     requests so SmartCaptcha rarely triggers.
+  2. Filter out marketplaces we already cover by their own adapter
+     (Wildberries / Ozon / Я.Маркет) so Runet is genuinely informal
+     shops (re-store / dns-shop / citilink / biggeek / mvideo / …).
+  3. Fan-out: for each candidate URL, ``curl_cffi`` with Chrome JA3
+     fetches the page and parses Schema.org ``Product`` JSON-LD to
+     extract price / image / brand. Offers without a parsed price are
+     dropped — ProductOffer.price is required.
 
-  1. **SearXNG** (self-hosted meta-search, the ``searxng`` service in
-     ``backend/docker-compose.yml``) discovers candidate URLs. SearXNG
-     must have ``search.formats`` include ``json`` — see
-     ``backend/searxng/settings.yml``.
-  2. We filter the marketplaces already covered by WB / Ozon / Yandex
-     Market adapters so the «4th source» is genuinely an informal Runet
-     shop, not another marketplace (criterion 25/100).
-  3. Each candidate URL is fetched with ``curl_cffi`` (Chrome
-     impersonation) and parsed for a Schema.org ``Product`` block in
-     ``<script type="application/ld+json">`` — most online stores
-     publish one, so we get name + price + image + brand without
-     site-specific code.
+Earlier iterations used SearXNG instead of Yandex SERP. SearXNG never
+returned rich snippets so we had to fetch every URL and check JSON-LD
+blind. Yandex SERP gives us pre-ranked, product-flavoured URLs so the
+hit rate per fetch is much higher.
 
-The 4th source is dynamic by construction: SearXNG re-queries the open
-web for every search, so the actual shops change per query.
+Live-validated in ``runet_research/05_jsonld_enrichment.py``.
 """
 
 from __future__ import annotations
@@ -33,12 +33,10 @@ from decimal import Decimal
 from typing import Any
 from urllib.parse import unquote, urljoin, urlparse
 
-import httpx
 import orjson
 import structlog
 
-from pricepulse.api.cache import get_search_cache
-from pricepulse.config import get_settings
+from pricepulse.antibot.yandex_browser import get_yandex_browser
 from pricepulse.domain.enums import SourceKind
 from pricepulse.domain.models import NormalizedQuery, ProductAttributes, ProductOffer
 from pricepulse.enrichment.attributes import (
@@ -929,19 +927,55 @@ def _to_offer(
     )
 
 
+async def _fetch_jsonld_offer(
+    session: Any, stub: dict[str, Any], timeout_s: float,
+) -> ProductOffer | None:
+    """Single-URL enrichment: GET the page, parse Schema.org Product,
+    build a ProductOffer. Returns None on anti-bot wall / no JSON-LD /
+    no parseable price.
+    """
+    url = stub["url"]
+    try:
+        page = await session.get(url, headers=_HEADERS, timeout=timeout_s)
+    except Exception as exc:
+        log.debug("runet.fetch_failed", url=url, error=str(exc))
+        return None
+    if page.status_code != 200:
+        log.debug("runet.http_non_200", url=url, status=page.status_code)
+        return None
+    html = page.text if isinstance(page.text, str) else page.content.decode(
+        "utf-8", errors="replace",
+    )
+    for payload in _walk_jsonld(html):
+        if not _is_product(payload):
+            continue
+        offer = _to_offer(url, payload)
+        if offer is None:
+            continue
+        # Merge SERP-side rating / reviews if JSON-LD didn't have them
+        # (cheap to re-derive via model_copy because ProductOffer is frozen).
+        update: dict[str, Any] = {}
+        if offer.rating is None and stub.get("rating") is not None:
+            update["rating"] = float(stub["rating"])
+        if offer.reviews_count is None and stub.get("reviews_count") is not None:
+            update["reviews_count"] = int(stub["reviews_count"])
+        return offer.model_copy(update=update) if update else offer
+    return None
+
+
 class RunetScraper:
-    """4th source — SearXNG → top non-marketplace URLs → JSON-LD."""
+    """4th source — Yandex SERP → non-marketplace candidates → JSON-LD."""
 
     source: SourceKind = SourceKind.RUNET
 
-    def __init__(self, timeout_s: float = 7.0, max_urls: int = 25) -> None:
-        # `timeout_s` is per-request. Tight on purpose: big shops
-        # (dns-shop, citilink, mvideo, sportmaster, …) tend to hang on
-        # datacenter IPs entirely rather than serve a 403, so a long
-        # timeout just delays the inevitable. With concurrency 12 + 7s
-        # cap we burn through a dead shop and move on quickly.
+    def __init__(
+        self,
+        *,
+        timeout_s: float = 8.0,
+        enrich_concurrency: int = 6,
+    ) -> None:
         self._timeout = timeout_s
-        self._max_urls = max_urls
+        self._enrich_concurrency = enrich_concurrency
 
     _FETCH_CONCURRENCY: int = 12
 
@@ -1073,252 +1107,94 @@ class RunetScraper:
         *,
         region_id: int = 213,
     ) -> ScrapeResult:
-        searxng_url = get_settings().searxng_url.rstrip("/")
         q = (query.normalized or query.raw).strip()
         if not q:
             return ScrapeResult(source=self.source, offers=[])
 
         with scrape_duration_seconds.labels(source=self.source.value).time():
-            cache = await get_search_cache()
-            query_tokens = _tokenize(q)
-            query_attrs = extract_query_attributes(q)
-
-            # 1) URL discovery from provider sitemaps. This is the primary
-            # on-prem path: no public search engine, no product hardcode.
-            candidate_urls = await self._discover_from_sitemaps(q, query_tokens, cache)
-
-            # 2) URL discovery via self-hosted SearXNG. Cached in Redis
-            #    because SearXNG's upstream engines (Brave/DDG/Startpage) hit
-            #    captcha + "Suspended: too many requests" within a handful
-            #    of queries, and re-hitting them empty-handed only deepens
-            #    the ban.
-            digest = hashlib.sha1(q.encode("utf-8"), usedforsecurity=False).hexdigest()
-            cache_key = f"runet:searxng:{digest}"
-            cached_payload = await cache.get(cache_key) if cache is not None else None
-            searxng_urls: list[str] = []
-            if isinstance(cached_payload, list) and len(candidate_urls) < self._max_urls:
-                searxng_urls = [u for u in cached_payload if isinstance(u, str)]
-                log.debug("runet.searxng_cache_hit", q=q, urls=len(searxng_urls))
-
-            if not searxng_urls and len(candidate_urls) < self._max_urls:
-                sx_body = await self._fetch_searxng(searxng_url, q)
-                if sx_body is None and not candidate_urls:
-                    scrape_requests_total.labels(
-                        source=self.source.value, outcome="blocked", proxy_tier="none",
-                    ).inc()
-                    return ScrapeResult(
-                        source=self.source, offers=[], error="SearXNG unavailable",
-                    )
-
-                for r in (sx_body or {}).get("results") or []:
-                    if not isinstance(r, dict):
-                        continue
-                    url = r.get("url")
-                    if not isinstance(url, str) or _is_excluded(url):
-                        continue
-                    if not _is_russian_tld(url):
-                        continue
-                    if _looks_like_search_query_url(url):
-                        # In-shop search-result URLs (?q=…) are dynamic
-                        # listings — rarely worth fetching, and SearXNG
-                        # returns plenty of static category pages anyway.
-                        continue
-                    searxng_urls.append(url)
-                    if len(searxng_urls) >= self._max_urls:
-                        break
-
-                # Reorder so curated shops (`_SHOP_POOL`) get fetched first.
-                searxng_urls.sort(key=_shop_priority)
-
-                if searxng_urls and cache is not None:
-                    # 6h TTL — SearXNG results shift slowly per query, but
-                    # we don't want to pin them indefinitely either.
-                    await cache.set(cache_key, searxng_urls, ttl_seconds=6 * 3600)
-
-            if searxng_urls:
-                seen_candidate_urls = set(candidate_urls)
-                for url in searxng_urls:
-                    if url not in seen_candidate_urls:
-                        candidate_urls.append(url)
-                        seen_candidate_urls.add(url)
-                    if len(candidate_urls) >= self._max_urls:
-                        break
-
-            if not candidate_urls:
+            # 1) URL discovery — Yandex SERP through the stealth browser
+            try:
+                browser = await get_yandex_browser()
+                serp = await browser.serp_search(q)
+            except Exception as exc:
                 scrape_requests_total.labels(
-                    source=self.source.value, outcome="ok", proxy_tier="none",
+                    source=self.source.value, outcome="blocked", proxy_tier="browser",
                 ).inc()
-                log.info("runet.empty", reason="no non-marketplace results")
+                log.warning("runet.yandex_browser_failed", error=str(exc))
+                return ScrapeResult(
+                    source=self.source, offers=[],
+                    error=f"Yandex SERP unavailable: {exc}",
+                )
+            if serp.get("error"):
+                return ScrapeResult(
+                    source=self.source, offers=[],
+                    error=f"Yandex SERP: {serp['error']}",
+                )
+
+            # Filter out marketplaces we cover natively + dedup by host
+            seen_hosts: set[str] = set()
+            stubs: list[dict[str, Any]] = []
+            for r in serp.get("products") or []:
+                url = r.get("url")
+                if not isinstance(url, str):
+                    continue
+                if _is_excluded(url):
+                    continue
+                host = urlparse(url).netloc.lower()
+                if host in seen_hosts:
+                    continue
+                seen_hosts.add(host)
+                stubs.append(r)
+            if not stubs:
+                scrape_requests_total.labels(
+                    source=self.source.value, outcome="ok", proxy_tier="browser",
+                ).inc()
+                log.info("runet.empty", reason="no non-marketplace SERP results")
                 return ScrapeResult(source=self.source, offers=[])
 
-            # 2) Fetch + JSON-LD extraction. curl_cffi is lazy-imported so
-            #    bare-bones envs (CI without native libs) still load this module.
+            # 2) Enrichment — fan-out via curl_cffi (Chrome JA3) for JSON-LD.
+            #    Each call may 403/429/no-jsonld — those silently drop.
             try:
                 from curl_cffi.requests import AsyncSession
-            except ImportError:  # pragma: no cover
+            except ImportError:    # pragma: no cover
                 return ScrapeResult(
                     source=self.source, offers=[],
                     error="curl_cffi not installed",
                 )
 
+            sem = asyncio.Semaphore(self._enrich_concurrency)
+
+            async def _bounded(stub: dict[str, Any], session: Any) -> ProductOffer | None:
+                async with sem:
+                    return await _fetch_jsonld_offer(session, stub, self._timeout)
+
+            async with AsyncSession(
+                impersonate="chrome", timeout=self._timeout,
+            ) as session:
+                results = await asyncio.gather(
+                    *(_bounded(s, session) for s in stubs[: limit * 3]),
+                    return_exceptions=True,
+                )
+
             offers: list[ProductOffer] = []
-            sem = asyncio.Semaphore(self._FETCH_CONCURRENCY)
-
-            async with AsyncSession(impersonate="chrome", timeout=self._timeout) as session:
-                async def fetch_page(url: str) -> str | None:
-                    async with sem:
-                        try:
-                            page = await session.get(url, headers=_HEADERS)
-                        except Exception as exc:
-                            log.debug("runet.fetch_failed", url=url, error=str(exc))
-                            return None
-                    if page.status_code != 200:
-                        return None
-                    return page.text if isinstance(page.text, str) else None
-
-                async def offers_from_page(url: str, *, cap: int = 5) -> list[ProductOffer]:
-                    """Every relevant Product on the page, capped per parent URL."""
-                    html = await fetch_page(url)
-                    if html is None:
-                        return []
-                    page_offers: list[ProductOffer] = []
-                    seen_page_urls: set[str] = set()
-                    for payload in _walk_jsonld(html):
-                        if not _is_product(payload):
-                            continue
-                        offer_url = _product_url_from(payload, url)
-                        offer = _to_offer(offer_url, payload, query_tokens=query_tokens)
-                        if offer is not None:
-                            offer = _attribute_checked(offer, query_attrs)
-                        if offer is not None:
-                            key = str(offer.url)
-                            if key in seen_page_urls:
-                                continue
-                            seen_page_urls.add(key)
-                            page_offers.append(offer)
-                            if len(page_offers) >= cap:
-                                break
-                    return page_offers
-
-                async def fetch_one(url: str) -> list[ProductOffer]:
-                    """Two-pass: direct Products → else mine ItemList children.
-
-                    Most general-purpose searches (`шины nokian R16`,
-                    `футболка adidas`) land us on a category page, not a
-                    card. The category JSON-LD usually contains an
-                    ItemList whose children point at real product cards,
-                    so on a miss we follow up to 3 of them in parallel —
-                    that's what turns "0 offers" into a real result for
-                    those queries.
-                    """
-                    html = await fetch_page(url)
-                    if html is None:
-                        return []
-                    payloads = _walk_jsonld(html)
-                    page_offers: list[ProductOffer] = []
-                    seen_page_urls: set[str] = set()
-                    for payload in payloads:
-                        if _is_product(payload):
-                            offer_url = _product_url_from(payload, url)
-                            offer = _to_offer(
-                                offer_url, payload, query_tokens=query_tokens,
-                            )
-                            if offer is not None:
-                                offer = _attribute_checked(offer, query_attrs)
-                            if offer is not None:
-                                key = str(offer.url)
-                                if key in seen_page_urls:
-                                    continue
-                                seen_page_urls.add(key)
-                                page_offers.append(offer)
-                                if len(page_offers) >= 5:
-                                    break
-                    if page_offers:
-                        return page_offers
-
-                    # Stage 2: embedded JS state (__NEXT_DATA__, digitalData, Nuxt).
-                    for embedded_offers in (
-                        _offers_from_next_data(html, url, query_tokens=query_tokens),
-                        _offers_from_digital_data(html, url, query_tokens=query_tokens),
-                        _offers_from_microdata(html, url, query_tokens=query_tokens),
-                    ):
-                        checked = []
-                        for o in embedded_offers:
-                            o = _attribute_checked(o, query_attrs)
-                            if o is not None:
-                                checked.append(o)
-                        if checked:
-                            return checked
-
-                    # Stage 3: generic meta + HTML heuristics.
-                    html_offer = _html_offer(url, html, query_tokens=query_tokens)
-                    if html_offer is not None:
-                        html_offer = _attribute_checked(html_offer, query_attrs)
-                    if html_offer is not None:
-                        return [html_offer]
-
-                    # Listing follow-up. Cap fan-out — a category can list
-                    # 50+ items and we only need the first few good matches per parent.
-                    child_urls = _extract_listing_child_urls(payloads)
-                    if not child_urls:
-                        return []
-                    host = urlparse(url).netloc.lower()
-                    child_urls = [
-                        c for c in child_urls
-                        if urlparse(c).netloc.lower() == host
-                    ][:5]
-                    if not child_urls:
-                        return []
-                    log.debug(
-                        "runet.listing_followup", parent=url, children=len(child_urls),
-                    )
-                    child_tasks = [
-                        asyncio.create_task(offers_from_page(c, cap=1)) for c in child_urls
-                    ]
-                    child_offers: list[ProductOffer] = []
-                    try:
-                        for coro in asyncio.as_completed(child_tasks):
-                            child_offers.extend(await coro)
-                            if len(child_offers) >= 5:
-                                break
-                    finally:
-                        for t in child_tasks:
-                            if not t.done():
-                                t.cancel()
-                    return child_offers[:5]
-
-                tasks = [asyncio.create_task(fetch_one(u)) for u in candidate_urls]
-                seen_urls: set[str] = set()
-                try:
-                    for coro in asyncio.as_completed(tasks):
-                        for offer in await coro:
-                            # Two different category pages often funnel into
-                            # the same product card via ItemList children;
-                            # drop the duplicate so the Best-Deal block isn't
-                            # picking the same offer twice.
-                            offer_url = str(offer.url)
-                            if offer_url in seen_urls:
-                                continue
-                            seen_urls.add(offer_url)
-                            offers.append(offer)
-                            if on_offer is not None:
-                                await on_offer(offer)
-                            if len(offers) >= limit:
-                                break
-                        if len(offers) >= limit:
-                            break
-                finally:
-                    for t in tasks:
-                        if not t.done():
-                            t.cancel()
+            for r in results:
+                if isinstance(r, BaseException):
+                    continue
+                if r is None:
+                    continue
+                offers.append(r)
+                if on_offer is not None:
+                    await on_offer(r)
+                if len(offers) >= limit:
+                    break
 
             scrape_requests_total.labels(
-                source=self.source.value, outcome="ok", proxy_tier="none",
+                source=self.source.value, outcome="ok", proxy_tier="browser",
             ).inc()
             scrape_offers_returned_total.labels(source=self.source.value).inc(len(offers))
             log.info(
                 "runet.ok",
-                returned=len(offers), urls_tried=len(candidate_urls),
+                returned=len(offers), urls_tried=len(stubs),
             )
             return ScrapeResult(source=self.source, offers=offers)
 

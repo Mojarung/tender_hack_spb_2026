@@ -198,6 +198,10 @@ async def _enrich_one(
                     "text": fb.joined_text or fb.text,
                     "published_at": fb.created,
                     "photos": [p["full"] for p in fb.photo_urls if p.get("full")],
+                    # `video` dropped: WB feedbacks v2 returns {preview, m3u8}
+                    # dicts but ProductOffer.reviews values are str|int|list[str]
+                    # |None — the dict fails Pydantic validation and silently
+                    # drops the whole offer. UI doesn't render videos anyway.
                 }
                 for fb in page.feedbacks
             ]

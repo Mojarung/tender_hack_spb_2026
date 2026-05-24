@@ -39,7 +39,7 @@ from pricepulse.scrapers.base import ScrapeResult, ScraperProtocol
 # TEMP: imports kept (commented in registry below) so reverting is one
 # uncomment, not a re-add. See _registry construction for the toggle.
 from pricepulse.scrapers.ozon import OzonScraper
-from pricepulse.scrapers.runet import RunetScraper  # noqa: F401
+from pricepulse.scrapers.runet import RunetScraper
 from pricepulse.scrapers.wb import WildberriesScraper
 from pricepulse.scrapers.yandex_market import YandexMarketScraper
 
@@ -78,6 +78,7 @@ class SearchOrchestrator:
             SourceKind.WB: WildberriesScraper(),
             SourceKind.OZON: OzonScraper(),
             SourceKind.YA_MARKET: YandexMarketScraper(),
+            SourceKind.RUNET: RunetScraper(),
         }
         self._cache = cache
         self._limiter = limiter or RateLimiter(None)
