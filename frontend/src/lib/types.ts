@@ -154,6 +154,44 @@ export interface User {
   display_name: string | null;
 }
 
+export interface PriceWatch {
+  id: number;
+  query: string;
+  interval_min: number;
+  threshold_pct: number;
+  region_id: number;
+  active: boolean;
+  last_best_price: string | null;
+  last_best_source: string | null;
+  last_best_url: string | null;
+  last_best_name: string | null;
+  last_check_at: string | null;
+  last_error: string | null;
+  created_at: string;
+}
+
+export interface PriceAlertTopOffer {
+  source: string;
+  price: string;
+  name: string;
+  url: string;
+}
+
+export interface PriceAlert {
+  id: number;
+  watch_id: number;
+  query: string;
+  prev_price: string;
+  new_price: string;
+  diff_pct: number;
+  offer_source: string | null;
+  offer_url: string | null;
+  offer_name: string | null;
+  top_offers: PriceAlertTopOffer[] | null;
+  created_at: string;
+  read_at: string | null;
+}
+
 export interface ChatResponse {
   reply: string;
   session_id: string;

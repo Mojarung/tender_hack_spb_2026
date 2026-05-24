@@ -1,7 +1,9 @@
 "use client";
 
+import clsx from "clsx";
 import { motion } from "framer-motion";
-import { AlertTriangle, CheckCircle2, CornerDownLeft, SearchX, Sparkles } from "lucide-react";
+import { Bell, BellOff, CornerDownLeft, Download, SearchX } from "lucide-react";
+import toast from "react-hot-toast";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
@@ -246,6 +248,10 @@ function SearchInner() {
   const from = (params.get("from") ?? "").trim();    // original user query (after a fix)
   const fromImage = params.get("from_image") === "1";
   const nofix = params.get("nofix") === "1";
+  // `confirmed=1` is added by handleClarificationSelect so we don't
+  // re-prompt the user with the same clarification card after they've
+  // picked a variant.
+  const confirmed = params.get("confirmed") === "1";
   const regionId = Number(params.get("region_id") ?? DEFAULT_REGION_ID);
   const region = getRegion(regionId);
   const [data, setData] = useState<SearchResponse | null>(null);
@@ -277,9 +283,11 @@ function SearchInner() {
     const isRawSearch = option.query.toLowerCase() === q.toLowerCase() || option.query === q;
     const sp = new URLSearchParams();
     sp.set("q", option.query);
-    if (isRawSearch) {
-      sp.set("nofix", "1");
-    }
+    // `confirmed=1` skips the clarification preflight on the next
+    // render — otherwise we'd ask the same question again. Raw-search
+    // also gets `nofix=1` so the spellfixer doesn't rewrite the literal.
+    sp.set("confirmed", "1");
+    if (isRawSearch) sp.set("nofix", "1");
     sp.set("region_id", String(region.id));
     router.push(`/search?${sp.toString()}`);
   };
@@ -294,11 +302,47 @@ function SearchInner() {
     }
 
     let cancelled = false;
-    setData({
-      query: { raw: q, normalized: q, expansions: [] },
-      groups: [], top_deals: [], took_ms: 0, partial: true,
-    });
-    setErr(null); setLoading(true); setLiveCorrection(null); setClarification(null); setRankedByUrl(new Map());
+    let handle: { close: () => void } | null = null;
+
+    const startSearch = () => {
+      if (cancelled) return;
+      setData({
+        query: { raw: q, normalized: q, expansions: [] },
+        groups: [], top_deals: [], took_ms: 0, partial: true,
+      });
+      setLoading(true);
+      setClarification(null);
+      setRankedByUrl(new Map());
+      handle = streamSearchInner();
+    };
+
+    // ── Pre-flight ambiguity check ──
+    // Skip on `confirmed=1` (user already picked an interpretation),
+    // on raw-search escape (`nofix=1`) — both signals mean "just search,
+    // don't pester me again".
+    setErr(null); setLiveCorrection(null); setClarification(null);
+    if (confirmed || nofix) {
+      startSearch();
+    } else {
+      setLoading(true);
+      api.clarify(q).then((res) => {
+        if (cancelled) return;
+        if (res.is_ambiguous && res.options.length > 0) {
+          setClarification(res);
+          setLoading(false);    // wait for user pick
+        } else {
+          startSearch();
+        }
+      }).catch(() => {
+        // If clarify backend is down, gracefully fall through to search.
+        if (!cancelled) startSearch();
+      });
+    }
+
+    return () => { cancelled = true; handle?.close(); };
+
+    function streamSearchInner(): { close: () => void } {
+      setErr(null);
     // New query ⇒ stale filters would silently hide unrelated brands/sources.
     setSourceFilter(new Set());
     setStringFilters({});
@@ -312,7 +356,7 @@ function SearchInner() {
     // Capture the corrected query so we can canonicalize the URL after `done`.
     let normalizedCaptured = "";
 
-    const handle = api.searchStream(q, 16, {
+    return api.searchStream(q, 16, {
       nofix: useNofix,
       region_id: region.id,
       handlers: {
@@ -327,9 +371,12 @@ function SearchInner() {
             setLiveCorrection({ from: q, to: normalizedCaptured });
           }
         },
+        // Backend SSE may still emit a clarification mid-stream — we
+        // only set it if the user *hasn't* already moved past one
+        // (otherwise it'd reappear after their choice).
         onQueryClarified: (c) => {
-          if (cancelled) return;
-          setClarification(c);
+          if (cancelled || confirmed) return;
+          if (c.is_ambiguous && c.options.length > 0) setClarification(c);
         },
         onSourceStarted: (e) => {
           if (cancelled) return;
@@ -413,13 +460,9 @@ function SearchInner() {
         },
       },
     });
-
-    return () => {
-      cancelled = true;
-      handle.close();
-    };
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, nofix, region.id]);
+  }, [q, nofix, confirmed, region.id]);
 
   // Track whether we already seeded the sliders for THIS query — fires
   // exactly once per search, on the transition from loading → done.
@@ -456,6 +499,16 @@ function SearchInner() {
   const all = data?.groups?.flatMap((g) => g.offers) ?? [];
   const sourceErrors = data?.groups?.filter((g) => g.error) ?? [];
   const allSourcesFailed = !loading && !!data?.groups?.length && sourceErrors.length === data.groups.length;
+
+  // Per-source median — used by ProductCard's "ДЕМПИНГ −X%" badge.
+  // A standalone helper so the empty-array case is just `undefined`.
+  const medianByGroup = new Map<Source, number>();
+  for (const g of data?.groups ?? []) {
+    const ps = g.offers.map((o) => Number(o.price)).filter((n) => n > 0).sort((a, b) => a - b);
+    if (ps.length === 0) continue;
+    const mid = Math.floor(ps.length / 2);
+    medianByGroup.set(g.source, ps.length % 2 ? ps[mid] : (ps[mid - 1] + ps[mid]) / 2);
+  }
 
   // Detect facets from current set. Cheap, runs every render.
   const facets = buildFacets(all);
@@ -632,18 +685,22 @@ function SearchInner() {
               const displayedQuery = data?.query?.normalized || liveCorrection?.to || q;
               return <h1 className="text-2xl font-semibold tracking-tight">Результаты по «{displayedQuery}»</h1>;
             })()}
-            <label className="text-xs text-[var(--color-ink-4)] flex items-center gap-2 mt-1.5">
-              Сортировка:
-              <select
-                value={sort}
-                onChange={(e) => setSort(e.target.value as SortMode)}
-                className="bg-white border border-[var(--color-line)] rounded-full text-sm text-[var(--color-ink-2)] px-3 py-1 focus:outline-none focus:border-[var(--color-accent)]"
-              >
-                {(Object.keys(SORT_LABEL) as SortMode[]).map((m) => (
-                  <option key={m} value={m}>{SORT_LABEL[m]}</option>
-                ))}
-              </select>
-            </label>
+            <div className="flex items-center gap-3 mt-1.5 flex-wrap">
+              <NmckMiniButton query={q} regionId={region.id} disabled={loading || all.length < 3} />
+              <WatchToggleButton query={q} regionId={region.id} disabled={!q.trim()} />
+              <label className="text-xs text-[var(--color-ink-4)] flex items-center gap-2">
+                Сортировка:
+                <select
+                  value={sort}
+                  onChange={(e) => setSort(e.target.value as SortMode)}
+                  className="bg-white border border-[var(--color-line)] rounded-full text-sm text-[var(--color-ink-2)] px-3 py-1 focus:outline-none focus:border-[var(--color-accent)]"
+                >
+                  {(Object.keys(SORT_LABEL) as SortMode[]).map((m) => (
+                    <option key={m} value={m}>{SORT_LABEL[m]}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
           </div>
           <p className="text-sm text-[var(--color-ink-4)] mt-1">
             {loading
@@ -745,6 +802,12 @@ function SearchInner() {
           <EmptyState query={q} />
         ) : (
           <>
+            {/* «Если бы это была закупка» — flagship banner for the
+                procurement context. Computes the recommended NMCK on
+                the fly (mirrors the server algorithm) and exposes the
+                Excel-download CTA inside the card itself. */}
+            <AuctionSimulator offers={all} query={liveCorrection?.to ?? q} regionId={region.id} />
+
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mt-6">
               {offers.map((o, i) => (
                 <ProductCard
@@ -752,6 +815,9 @@ function SearchInner() {
                   offer={o}
                   index={i}
                   ranked={rankedByUrl.get(o.url)}
+                  query={liveCorrection?.to ?? q}
+                  allOffers={all}
+                  groupMedian={medianByGroup.get(o.source)}
                 />
               ))}
             </div>
@@ -805,6 +871,303 @@ function EmptyState({ query }: { query: string }) {
     </motion.div>
   );
 }
+
+/** Главная плашка-витрина для жюри: «если бы это была госзакупка —
+ *  вот рекомендуемая цена и кнопка скачать обоснование». Считается тем
+ *  же алгоритмом, что и Excel-export на бэке (фильтр выбросов + score
+ *  по rating × log(reviews)), чтобы цифра на экране совпадала с цифрой
+ *  в скачанном файле. */
+function AuctionSimulator({
+  offers, query, regionId,
+}: {
+  offers: ProductOffer[];
+  query: string;
+  regionId: number;
+}) {
+  const valid = offers.filter((o) => {
+    const p = Number(o.price);
+    return Number.isFinite(p) && p > 0;
+  });
+  if (valid.length < 3) return null;
+
+  // Dedup by seller (keep cheapest), filter outliers, score by trust.
+  const bySeller = new Map<string, ProductOffer>();
+  for (const o of valid) {
+    const key = (o.seller || o.source).trim().toLowerCase();
+    const cur = bySeller.get(key);
+    if (!cur || Number(o.price) < Number(cur.price)) bySeller.set(key, o);
+  }
+  const pool = [...bySeller.values()];
+  const sortedPrices = pool.map((o) => Number(o.price)).sort((a, b) => a - b);
+  const m = sortedPrices.length;
+  const median = m % 2 ? sortedPrices[(m - 1) / 2]
+                       : (sortedPrices[m / 2 - 1] + sortedPrices[m / 2]) / 2;
+  // Toss obvious counterfeits (cheap-half outliers) + premium bundles (top outliers).
+  let realistic = pool.filter((o) => {
+    const p = Number(o.price);
+    return p >= median * 0.5 && p <= median * 2.0;
+  });
+  if (realistic.length < 3) realistic = pool;    // fallback when filter is too aggressive
+
+  const trust = (o: ProductOffer) => {
+    const r = Number(o.rating) || 4.0;
+    const n = Number(o.reviews_count) || 0;
+    return Math.log10(n + 1) * r;
+  };
+  realistic.sort((a, b) => trust(b) - trust(a)
+    || Math.abs(Number(a.price) - median) - Math.abs(Number(b.price) - median));
+  const top = realistic.slice(0, 5);
+  if (top.length < 3) return null;
+
+  const prices = top.map((o) => Number(o.price));
+  const mean = prices.reduce((s, x) => s + x, 0) / prices.length;
+  const variance = prices.reduce((s, x) => s + (x - mean) ** 2, 0) / (prices.length - 1);
+  const sigma = Math.sqrt(variance);
+  const cv = (sigma / mean) * 100;
+  const cheapest = Math.min(...prices);
+  const homogeneous = cv <= 33.0;
+  const fmt = (n: number) => Math.round(n).toLocaleString("ru-RU") + " ₽";
+
+  return (
+    <div className="mt-6 rounded-2xl border border-[var(--color-accent-100)] bg-gradient-to-br from-[var(--color-accent-50)] via-white to-white p-6 md:p-7 overflow-hidden relative">
+      {/* Декоративный кружок-блик в углу */}
+      <div className="absolute -top-20 -right-16 w-64 h-64 rounded-full bg-[var(--color-accent-100)] opacity-25 blur-3xl pointer-events-none" />
+
+      <div className="relative grid md:grid-cols-[1fr_auto] gap-6 items-center">
+        <div>
+          <div className="inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--color-accent-2)] mb-2">
+            <span className="grid place-items-center w-5 h-5 rounded-full bg-[var(--color-accent)] text-white text-[10px]">🏛</span>
+            Если бы это была государственная закупка
+          </div>
+          <div className="text-sm text-[var(--color-ink-3)] mb-3 max-w-xl leading-relaxed">
+            Это сколько рекомендуется заложить в бюджет на покупку «{query}».
+            Считаем по 5 проверенным магазинам — у каждого хороший рейтинг
+            и много отзывов.
+          </div>
+          <div className="flex items-baseline gap-3 flex-wrap">
+            <span className="text-[11px] text-[var(--color-ink-4)] uppercase tracking-wider">Рекомендуемая цена</span>
+          </div>
+          <div className="flex items-baseline gap-2 mt-1">
+            <span className="text-4xl md:text-5xl font-bold tabular-nums text-[var(--color-accent-2)] tracking-tight">
+              {fmt(mean)}
+            </span>
+            <span className="text-sm text-[var(--color-ink-4)]">за 1 шт.</span>
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Pill
+              ok
+              label={`✓ ${top.length} магазина проверено`}
+              hint={`по закону нужно минимум 3`}
+            />
+            <Pill
+              ok={homogeneous}
+              label={homogeneous
+                ? `✓ Цены сопоставимы (разброс ${cv.toFixed(0)}%)`
+                : `⚠ Разные цены (разброс ${cv.toFixed(0)}%)`}
+              hint={homogeneous
+                ? "норма — отличия меньше трети"
+                : "лучше пересмотреть состав магазинов"}
+            />
+            <Pill
+              label={`Самое дешёвое: ${fmt(cheapest)}`}
+              hint="ориентир нижней границы торгов"
+            />
+          </div>
+        </div>
+
+        <div className="flex flex-col items-stretch md:items-end gap-2 shrink-0 md:min-w-[200px]">
+          <BigDownloadButton query={query} regionId={regionId} />
+          <span className="text-[11px] text-[var(--color-ink-4)] text-center md:text-right">
+            Excel с расчётом для закупочной документации
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+function Pill({ label, hint, ok }: { label: string; hint?: string; ok?: boolean }) {
+  const cls = ok === undefined
+    ? "bg-white text-[var(--color-ink-2)] border-[var(--color-border)]"
+    : ok
+      ? "bg-[color-mix(in_srgb,var(--color-good)_14%,white)] text-[var(--color-good)] border-[color-mix(in_srgb,var(--color-good)_30%,transparent)]"
+      : "bg-[color-mix(in_srgb,var(--color-warn)_14%,white)] text-[var(--color-warn)] border-[color-mix(in_srgb,var(--color-warn)_30%,transparent)]";
+  return (
+    <span
+      title={hint}
+      className={clsx(
+        "inline-flex items-center text-xs px-3 py-1.5 rounded-full border font-medium",
+        cls,
+      )}
+    >
+      {label}
+    </span>
+  );
+}
+
+
+/** Small chip-style fallback for the sort row — always present when
+ *  the search produced ≥3 offers, so the user can still grab the Excel
+ *  even for narrow queries where the big AuctionSimulator banner
+ *  doesn't render (it only shows when filtering yields 5 trusted КП). */
+function NmckMiniButton({
+  query, regionId, disabled,
+}: {
+  query: string;
+  regionId: number;
+  disabled: boolean;
+}) {
+  const [busy, setBusy] = useState(false);
+  async function onClick() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api.nmckExport(query, { region_id: regionId, max_per_source: 10 });
+      toast.success("Готово! Excel скачан");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message.slice(0, 80) : "не вышло");
+    } finally { setBusy(false); }
+  }
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled || busy}
+      title="Скачать готовое обоснование цены контракта (Excel)"
+      className={clsx(
+        "inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full transition-colors",
+        "bg-[var(--color-accent-50)] text-[var(--color-accent-2)] hover:bg-[var(--color-accent-100)]",
+        "disabled:opacity-40 disabled:cursor-not-allowed",
+      )}
+    >
+      <Download className="w-3.5 h-3.5" />
+      {busy ? "Готовим…" : "НМЦК · Excel"}
+    </button>
+  );
+}
+
+function BigDownloadButton({ query, regionId }: { query: string; regionId: number }) {
+  const [busy, setBusy] = useState(false);
+  async function onClick() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api.nmckExport(query, { region_id: regionId, max_per_source: 10 });
+      toast.success("Готово! Excel скачан");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message.slice(0, 80) : "не вышло");
+    } finally { setBusy(false); }
+  }
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={busy}
+      className={clsx(
+        "inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-sm",
+        "bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent-2)] transition-colors",
+        "shadow-[0_8px_24px_rgba(99,102,241,0.25)] hover:shadow-[0_12px_28px_rgba(99,102,241,0.35)]",
+        "disabled:opacity-60 disabled:cursor-not-allowed",
+      )}
+    >
+      <Download className="w-4 h-4" />
+      {busy ? "Готовим Excel…" : "Скачать обоснование"}
+    </button>
+  );
+}
+
+
+/** "Следить за ценой" toggle. Looks up the user's watch list on mount;
+ *  shows BellOff when there's no matching watch yet, Bell (active) when
+ *  one already exists. On click: creates the watch (default 15 min /
+ *  ±2 %) or deletes it. After mutation we ping the WatchBell via the
+ *  `pp.watch.refresh` custom event so the badge updates immediately. */
+function WatchToggleButton({
+  query, regionId, disabled,
+}: {
+  query: string;
+  regionId: number;
+  disabled: boolean;
+}) {
+  const [watchId, setWatchId] = useState<number | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [initLoading, setInitLoading] = useState(true);
+  const queryRef = useRef(query);
+  queryRef.current = query;
+
+  // Re-check whether a matching active watch exists. Re-runs on query
+  // change AND on the `pp.watch.refresh` event — without the latter,
+  // deleting the watch from the WatchBell would leave this button stuck
+  // in "Слежу", and the next click would 404 against a removed id.
+  useEffect(() => {
+    let cancelled = false;
+    async function check() {
+      setInitLoading(true);
+      try {
+        const all = await api.watches.list();
+        if (cancelled) return;
+        const match = all.find(
+          (w) => w.active && w.query.trim().toLowerCase() === queryRef.current.trim().toLowerCase(),
+        );
+        setWatchId(match ? match.id : null);
+      } catch {
+        if (!cancelled) setWatchId(null);
+      } finally {
+        if (!cancelled) setInitLoading(false);
+      }
+    }
+    check();
+    window.addEventListener("pp.watch.refresh", check);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("pp.watch.refresh", check);
+    };
+  }, [query]);
+
+  async function onClick() {
+    if (loading) return;
+    setLoading(true);
+    try {
+      if (watchId != null) {
+        await api.watches.remove(watchId);
+        setWatchId(null);
+        toast("Слежение снято", { icon: "🔕" });
+      } else {
+        const w = await api.watches.create({ query, region_id: regionId });
+        setWatchId(w.id);
+        toast.success(`Слежу за «${query}» — пингну при изменении ≥ ${w.threshold_pct}%`);
+      }
+      window.dispatchEvent(new Event("pp.watch.refresh"));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message.slice(0, 80) : "не вышло");
+    } finally { setLoading(false); }
+  }
+
+  const active = watchId != null;
+  return (
+    <button
+      type="button"
+      disabled={disabled || initLoading || loading}
+      onClick={onClick}
+      title={active
+        ? "Снять с слежения — больше не буду присылать уведомления"
+        : "Следить за этим запросом — пингну, когда цена изменится"}
+      className={clsx(
+        "inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full transition-colors",
+        active
+          ? "bg-[color-mix(in_srgb,var(--color-good)_18%,transparent)] text-[var(--color-good)] hover:bg-[color-mix(in_srgb,var(--color-good)_28%,transparent)]"
+          : "bg-[var(--color-surface-2)] text-[var(--color-ink-3)] hover:bg-[var(--color-accent-50)] hover:text-[var(--color-accent-2)]",
+        "disabled:opacity-40 disabled:cursor-not-allowed",
+      )}
+    >
+      {active ? <Bell className="w-3.5 h-3.5" /> : <BellOff className="w-3.5 h-3.5" />}
+      {loading ? "…" : active ? "Слежу" : "Следить за ценой"}
+    </button>
+  );
+}
+
 
 function SourceCheck({
   checked, onToggle, label, count, error, group, currency, inFlight,

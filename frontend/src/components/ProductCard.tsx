@@ -6,6 +6,7 @@ import { Eye, Heart, Star, Truck } from "lucide-react";
 import { useState } from "react";
 import toast from "react-hot-toast";
 
+import { PriceSparkline } from "@/components/PriceSparkline";
 import { ProductDetailModal } from "@/components/ProductDetailModal";
 import { api, getToken, proxyImage } from "@/lib/api";
 import { formatPrice, itemIdFromOffer } from "@/lib/format";
@@ -33,6 +34,9 @@ interface Props {
   index?: number;
   highlight?: boolean;   // best deal accent
   ranked?: RankedOffer;  // relevance badge data
+  query?: string;        // forwarded to the AI explainer
+  allOffers?: ProductOffer[];   // forwarded to the AI explainer for context
+  groupMedian?: number;
 }
 
 function relevanceMeta(ranked: RankedOffer): { pct: number; label: string; colorClass: string } {
@@ -49,7 +53,10 @@ function relevanceMeta(ranked: RankedOffer): { pct: number; label: string; color
   return { pct, label, colorClass };
 }
 
-export function ProductCard({ offer, index = 0, highlight, ranked }: Props) {
+export function ProductCard({ offer, index = 0, highlight, ranked, query, allOffers, groupMedian }: Props) {
+  /** Median price within the same SourceGroup — used to flag offers
+   *  that fall ≥25 % below as «ДЕМПИНГ» per 44-ФЗ ст.37 (the buyer
+   *  must request extra performance bond from such a supplier). */
   const [fav, setFav] = useState(false);
   const [busy, setBusy] = useState(false);
   const [imgFailed, setImgFailed] = useState(false);
@@ -107,7 +114,7 @@ export function ProductCard({ offer, index = 0, highlight, ranked }: Props) {
       >
         {/* Source + relevance badge + favorite */}
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 flex-wrap">
             <div className="chip">
               <span className={clsx("source-dot", sourceClass[offer.source])} />
               {SOURCE_LABEL[offer.source]}
@@ -123,6 +130,24 @@ export function ProductCard({ offer, index = 0, highlight, ranked }: Props) {
                 {rel.pct}%
               </span>
             )}
+            {/* «ДЕМПИНГ −X%» — when price drops ≥25 % below the source
+                median. Triggers anti-dumping clause (44-ФЗ ст.37) —
+                the buyer must request 1.5× performance bond from such
+                a supplier. Hover for the explanation. */}
+            {(() => {
+              const price = Number(offer.price);
+              if (!groupMedian || !(price > 0)) return null;
+              const dropPct = Math.round(((groupMedian - price) / groupMedian) * 100);
+              if (dropPct < 25) return null;
+              return (
+                <span
+                  title={`Цена ниже медианы ${Math.round(groupMedian).toLocaleString("ru-RU")} ₽ на ${dropPct}% — по 44-ФЗ ст.37 потребуется повышенное (1.5×) обеспечение контракта`}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-50 text-red-700 border border-red-200"
+                >
+                  ⚠ ДЕМПИНГ −{dropPct}%
+                </span>
+              );
+            })()}
           </div>
           <button
             type="button"
@@ -194,12 +219,15 @@ export function ProductCard({ offer, index = 0, highlight, ranked }: Props) {
           </div>
         </div>
 
-        {/* Price + CTA */}
-        <div className="flex items-end justify-between pt-1">
-          <div className="text-lg font-semibold tabular-nums">
-            {formatPrice(offer.price, offer.currency)}
+        {/* Price + sparkline + CTA */}
+        <div className="flex items-end justify-between pt-1 gap-2">
+          <div className="min-w-0">
+            <div className="text-lg font-semibold tabular-nums">
+              {formatPrice(offer.price, offer.currency)}
+            </div>
+            <PriceSparkline offer={offer} />
           </div>
-          <span className="text-xs text-[var(--color-ink-4)] inline-flex items-center gap-1 group-hover:text-[var(--color-ink-2)] transition-colors">
+          <span className="text-xs text-[var(--color-ink-4)] inline-flex items-center gap-1 group-hover:text-[var(--color-ink-2)] transition-colors shrink-0">
             Подробнее <Eye className="w-3 h-3" />
           </span>
         </div>
@@ -209,6 +237,8 @@ export function ProductCard({ offer, index = 0, highlight, ranked }: Props) {
         offer={modalOpen ? offer : null}
         onClose={() => setModalOpen(false)}
         ranked={modalOpen ? ranked : undefined}
+        query={query}
+        allOffers={allOffers}
       />
     </>
   );

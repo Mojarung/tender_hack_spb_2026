@@ -1,7 +1,7 @@
 import { DEFAULT_REGION_ID } from "./regions";
 import type {
-  ChatResponse, Favorite, ImageQueryResponse, NormalizedQuery, ProductOffer, QueryClarification,
-  RankedOffer, SearchResponse, Source, User,
+  ChatResponse, Favorite, ImageQueryResponse, NormalizedQuery, PriceAlert, PriceWatch,
+  ProductOffer, QueryClarification, RankedOffer, SearchResponse, Source, User,
 } from "./types";
 
 type SearchStreamEventName =
@@ -54,10 +54,27 @@ export function proxyImage(url: string | null | undefined, source: string): stri
 }
 
 const STORAGE_KEY = "pp.jwt";
+const ANON_KEY = "pp.anon_id";
 
 export function getToken(): string | null {
   if (typeof window === "undefined") return null;
   return window.localStorage.getItem(STORAGE_KEY);
+}
+
+/** Stable per-browser identifier the watches endpoints use when there's
+ *  no JWT. Generated on first read, kept forever (cleared only when the
+ *  user manually wipes localStorage). */
+export function getAnonId(): string {
+  if (typeof window === "undefined") return "ssr-placeholder";
+  let v = window.localStorage.getItem(ANON_KEY);
+  if (!v) {
+    v = typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : Array.from(crypto.getRandomValues(new Uint8Array(16)))
+          .map((b) => b.toString(16).padStart(2, "0")).join("");
+    window.localStorage.setItem(ANON_KEY, v);
+  }
+  return v;
 }
 
 function setToken(t: string | null) {
@@ -74,6 +91,9 @@ async function http<T>(path: string, init: RequestInit = {}, expect = "json"): P
   };
   const t = getToken();
   if (t) headers.Authorization = `Bearer ${t}`;
+  // Always identify the browser so the watches endpoints work without
+  // a login. Backend ignores it when a valid JWT is present.
+  if (typeof window !== "undefined") headers["X-Anon-Id"] = getAnonId();
   Object.assign(headers, init.headers ?? {});
 
   const res = await fetch(BASE + path, { ...init, headers });
@@ -134,6 +154,16 @@ export const api = {
     return (await res.json()) as ImageQueryResponse;
   },
 
+  /** Cheap pre-flight: ask Gemma if the query is ambiguous (e.g.
+   *  "лодка и яблоко" mixes two unrelated products). The frontend
+   *  uses this BEFORE kicking off a full search so we don't waste a
+   *  multi-source scrape on a doomed literal query. */
+  clarify: (query: string) =>
+    http<QueryClarification>("/api/v1/search/clarify", {
+      method: "POST",
+      body: JSON.stringify({ query }),
+    }),
+
   searchStream: (
     query: string,
     max_per_source = 16,
@@ -183,6 +213,35 @@ export const api = {
     };
 
     return { close: () => es.close() };
+  },
+
+  watches: {
+    list: () => http<PriceWatch[]>("/api/v1/watches"),
+    create: (b: { query: string; interval_min?: number; threshold_pct?: number; region_id?: number }) =>
+      http<PriceWatch>("/api/v1/watches", {
+        method: "POST",
+        body: JSON.stringify({
+          query: b.query,
+          interval_min: b.interval_min ?? 15,
+          threshold_pct: b.threshold_pct ?? 2.0,
+          region_id: b.region_id ?? DEFAULT_REGION_ID,
+        }),
+      }),
+    remove: (id: number) =>
+      http<void>(`/api/v1/watches/${id}`, { method: "DELETE" }),
+    alerts: (opts: { unread?: boolean; limit?: number } = {}) => {
+      const p = new URLSearchParams();
+      if (opts.unread) p.set("unread", "true");
+      if (opts.limit) p.set("limit", String(opts.limit));
+      const qs = p.toString();
+      return http<PriceAlert[]>(`/api/v1/watches/alerts${qs ? `?${qs}` : ""}`);
+    },
+    unreadCount: () =>
+      http<{ unread: number }>("/api/v1/watches/alerts/count"),
+    markRead: (id: number) =>
+      http<void>(`/api/v1/watches/alerts/${id}/read`, { method: "POST" }),
+    markAllRead: () =>
+      http<{ unread: number }>("/api/v1/watches/alerts/read-all", { method: "POST" }),
   },
 
   favorites: {
@@ -235,4 +294,113 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ query, title, seller: seller ?? null }),
     }),
+
+  /** Price history points for a given offer (latest first). Empty list
+   *  when nothing is captured yet — the sparkline degrades to a single
+   *  dot in that case. */
+  priceHistory: (source: string, itemId: string, limit = 60) =>
+    http<{ source: string; item_id: string; count: number;
+           points: { ts: string; price: string }[] }>(
+      `/api/v1/price-history/${source}/${encodeURIComponent(itemId)}?limit=${limit}`,
+    ),
+
+  /** Stream an AI-generated "why this is a good deal" explanation. Returns
+   *  a callable that yields fragments; close() aborts the request. Falls
+   *  back to a static summary if Ollama is down. */
+  explainStream: (
+    query: string,
+    offer: { source: string; name: string; price: string; seller?: string | null;
+             rating?: number | null; reviews_count?: number | null; url?: string | null },
+    allOffers: { source: string; name: string; price: string; seller?: string | null;
+                 rating?: number | null; reviews_count?: number | null }[],
+    onChunk: (text: string) => void,
+    onDone?: () => void,
+    onError?: (msg: string) => void,
+  ): { close: () => void } => {
+    const ctrl = new AbortController();
+    (async () => {
+      try {
+        const res = await fetch(`${BASE}/api/v1/explain`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: ctrl.signal,
+          body: JSON.stringify({ query, offer, all_offers: allOffers }),
+        });
+        if (!res.ok || !res.body) {
+          onError?.(`${res.status} ${res.statusText}`);
+          return;
+        }
+        const reader = res.body.getReader();
+        const dec = new TextDecoder("utf-8");
+        let buf = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          // SSE frames: split on double-newline
+          const frames = buf.split("\n\n");
+          buf = frames.pop() ?? "";
+          for (const frame of frames) {
+            if (!frame.startsWith("data: ")) continue;
+            const payload = frame.slice(6);
+            if (payload === "[DONE]") { onDone?.(); return; }
+            if (payload.startsWith("[ERROR]")) { onError?.(payload.slice(7).trim()); return; }
+            onChunk(payload.replace(/\\n/g, "\n"));
+          }
+        }
+        onDone?.();
+      } catch (e) {
+        if (ctrl.signal.aborted) return;
+        onError?.(e instanceof Error ? e.message : String(e));
+      }
+    })();
+    return { close: () => ctrl.abort() };
+  },
+
+  /** LLM aspect extraction from product reviews — returns pros/cons chips
+   *  + an overall sentiment score (0..100). Cached server-side for 24 h
+   *  per (offer_url, review_count). Use only when there are ≥3 reviews
+   *  with real text — otherwise the model invents aspects. */
+  aspects: (offer_url: string, reviews: string[]) =>
+    http<{
+      pros: { label: string; mentions: number }[];
+      cons: { label: string; mentions: number }[];
+      score: number;
+      n_reviews_used: number;
+    }>("/api/v1/aspects", {
+      method: "POST",
+      body: JSON.stringify({ offer_url, reviews }),
+    }),
+
+  /** Run a search and download the result as a 44-ФЗ Приложение №1 Excel.
+   *  Backend re-fetches via the orchestrator (uses cache), assembles the
+   *  workbook, returns it as a blob. We trigger the browser download here. */
+  nmckExport: async (
+    query: string,
+    opts: { max_per_source?: number; region_id?: number; quantity?: number } = {},
+  ) => {
+    const res = await fetch(`${BASE}/api/v1/nmck/export`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query,
+        max_per_source: opts.max_per_source ?? 10,
+        region_id: opts.region_id ?? DEFAULT_REGION_ID,
+        quantity: opts.quantity ?? 1,
+      }),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error(txt || `${res.status} ${res.statusText}`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `НМЦК_${query.slice(0, 60).replace(/\s+/g, "_")}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  },
 };

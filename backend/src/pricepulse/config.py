@@ -115,6 +115,13 @@ class Settings(BaseSettings):
     image_search_max_bytes: int = 8_000_000
     image_search_cache_ttl_seconds: int = 24 * 3600
 
+    # Price-watch background loop — tick interval in seconds. Default 30s
+    # gives us roughly 60 checks/min ceiling against the stealth browser
+    # pool (per-tick cap lives in watcher/loop.py:WATCHER_PARALLEL).
+    watcher_tick_sec: int = 30
+    # Turn the loop off entirely in tests / minimal containers.
+    watcher_enabled: bool = True
+
     # Demo mode — pre-warm Redis cache for jury-known queries so the live
     # demo answers in <100 ms. Paid feature flags / cost-guard are gone —
     # nothing in the project hits a paid third-party service any more.
