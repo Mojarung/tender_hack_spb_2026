@@ -10,10 +10,10 @@ interface SmartSuggestionCardProps {
   onSelect: (option: ClarificationOption) => void;
 }
 
-/** Minimal one-line clarifier: question text + a row of small option
- *  chips. No header, no badge, no icon — the question itself is the
- *  signal. Shown BEFORE the search runs so the user picks an
- *  interpretation first and we don't waste a multi-source scrape. */
+/** Minimal one-line clarifier in the site's own palette — no header,
+ *  no badge, no icon. The question itself is the signal. Rendered
+ *  BEFORE the search runs so the user picks an interpretation first
+ *  and we don't waste a multi-source scrape on a doomed literal query. */
 export const SmartSuggestionCard: React.FC<SmartSuggestionCardProps> = ({
   clarification,
   onSelect,
@@ -24,14 +24,14 @@ export const SmartSuggestionCard: React.FC<SmartSuggestionCardProps> = ({
   return (
     <AnimatePresence>
       <motion.div
-        initial={{ opacity: 0, y: -8 }}
+        initial={{ opacity: 0, y: -6 }}
         animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, y: -8 }}
+        exit={{ opacity: 0, y: -6 }}
         transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
         className="mb-5"
       >
-        <div className="rounded-xl border border-zinc-200 bg-white px-4 py-3 flex flex-wrap items-center gap-2">
-          <span className="text-sm text-zinc-700">
+        <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)] px-4 py-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+          <span className="text-sm text-[var(--color-ink-2)]">
             {clarification.reason ?? "Что именно вы ищете?"}
           </span>
           <div className="flex flex-wrap gap-1.5 ml-auto">
@@ -49,8 +49,8 @@ export const SmartSuggestionCard: React.FC<SmartSuggestionCardProps> = ({
                   className={
                     "text-xs font-medium px-3 py-1.5 rounded-full transition-colors " +
                     (isRawSearch
-                      ? "bg-zinc-100 hover:bg-zinc-200 text-zinc-600"
-                      : "bg-[var(--color-accent)] hover:bg-[var(--color-accent-2)] text-white")
+                      ? "bg-white text-[var(--color-ink-3)] border border-[var(--color-border)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-ink-2)]"
+                      : "bg-[var(--color-accent-50)] text-[var(--color-accent-2)] hover:bg-[var(--color-accent-100)]")
                   }
                 >
                   {cleanLabel}

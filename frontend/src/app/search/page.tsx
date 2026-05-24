@@ -673,6 +673,7 @@ function SearchInner() {
               return <h1 className="text-2xl font-semibold tracking-tight">Результаты по «{displayedQuery}»</h1>;
             })()}
             <div className="flex items-center gap-3 mt-1.5 flex-wrap">
+              <NmckMiniButton query={q} regionId={region.id} disabled={loading || all.length < 3} />
               <WatchToggleButton query={q} regionId={region.id} disabled={!q.trim()} />
               <label className="text-xs text-[var(--color-ink-4)] flex items-center gap-2">
                 Сортировка:
@@ -966,6 +967,46 @@ function Pill({ label, hint, ok }: { label: string; hint?: string; ok?: boolean 
   );
 }
 
+
+/** Small chip-style fallback for the sort row — always present when
+ *  the search produced ≥3 offers, so the user can still grab the Excel
+ *  even for narrow queries where the big AuctionSimulator banner
+ *  doesn't render (it only shows when filtering yields 5 trusted КП). */
+function NmckMiniButton({
+  query, regionId, disabled,
+}: {
+  query: string;
+  regionId: number;
+  disabled: boolean;
+}) {
+  const [busy, setBusy] = useState(false);
+  async function onClick() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api.nmckExport(query, { region_id: regionId, max_per_source: 10 });
+      toast.success("Готово! Excel скачан");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message.slice(0, 80) : "не вышло");
+    } finally { setBusy(false); }
+  }
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled || busy}
+      title="Скачать готовое обоснование цены контракта (Excel)"
+      className={clsx(
+        "inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full transition-colors",
+        "bg-[var(--color-accent-50)] text-[var(--color-accent-2)] hover:bg-[var(--color-accent-100)]",
+        "disabled:opacity-40 disabled:cursor-not-allowed",
+      )}
+    >
+      <Download className="w-3.5 h-3.5" />
+      {busy ? "Готовим…" : "НМЦК · Excel"}
+    </button>
+  );
+}
 
 function BigDownloadButton({ query, regionId }: { query: string; regionId: number }) {
   const [busy, setBusy] = useState(false);
