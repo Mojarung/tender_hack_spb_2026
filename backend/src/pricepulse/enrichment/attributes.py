@@ -307,6 +307,10 @@ _MATERIALS: dict[str, str] = {
 
 _TYRE_RE = re.compile(r"\b(?P<w>\d{3})\s*/\s*(?P<p>\d{2})\s*r?\s*(?P<r>\d{2})\b")
 _TYRE_SPACED_RE = re.compile(r"\b(?P<w>\d{3})\s+(?P<p>\d{2})\s+(?P<r>\d{2})\b")
+# Standalone-параметры — "ширина 200", "высота 55", "R18" / "диаметр 18".
+_TYRE_WIDTH_RE = re.compile(r"\b(?:ширина(?:\s*профиля)?|width)\s*(?P<n>\d{3})\b")
+_TYRE_PROFILE_RE = re.compile(r"\b(?:высота(?:\s*профиля)?|profile)\s*(?P<n>\d{2})\b")
+_TYRE_RIM_RE = re.compile(r"\b(?:r|радиус|диаметр|посадочный\s*диаметр)\s*(?P<n>1[2-9]|2[0-4])\b")
 _IPHONE_RE = re.compile(
     r"\b(?:iphone|айфон)\s*(?P<num>\d{1,2})"
     r"(?:\s*(?P<tier>pro\s*max|про\s*макс|pro|про|max|макс|plus|плюс))?\b"
@@ -576,6 +580,20 @@ def _extract_tyre(cleaned: str) -> dict[str, Any]:
         out["tyre_width_mm"] = int(match.group("w"))
         out["tyre_profile"] = int(match.group("p"))
         out["tyre_rim_inch"] = int(match.group("r"))
+    # Standalone parameters — "ширина 200", "высота 55", "R18". Срабатывают
+    # когда нет полного 205/55R16, например в коротком запросе.
+    if "tyre_width_mm" not in out:
+        wm = _TYRE_WIDTH_RE.search(cleaned)
+        if wm:
+            out["tyre_width_mm"] = int(wm.group("n"))
+    if "tyre_profile" not in out:
+        pm = _TYRE_PROFILE_RE.search(cleaned)
+        if pm:
+            out["tyre_profile"] = int(pm.group("n"))
+    if "tyre_rim_inch" not in out:
+        rm = _TYRE_RIM_RE.search(cleaned)
+        if rm:
+            out["tyre_rim_inch"] = int(rm.group("n"))
     if any(word in cleaned for word in ("зим", "winter")):
         out["season"] = "winter"
     elif any(word in cleaned for word in ("летн", "summer")):
@@ -909,7 +927,8 @@ def _extract_small_appliance(cleaned: str) -> dict[str, Any]:
 
 def _confidence(values: dict[str, Any]) -> float:
     keys = [
-        "category", "brand", "model", "color", "storage_gb", "tyre_width_mm",
+        "category", "brand", "model", "color", "storage_gb",
+        "tyre_width_mm", "tyre_profile", "tyre_rim_inch",
         "season", "device_type", "print_technology", "apparel_type", "size", "gender", "material",
         "paper_format", "density_gm2", "sheets_count", "staple_size", "sheet_capacity",
         "page_yield", "pack_count", "duplex", "print_speed_ppm", "screen_size_inch",

@@ -46,7 +46,7 @@ from pricepulse.scrapers.base import ScrapeResult, ScraperProtocol
 from pricepulse.scrapers.ozon import OzonScraper
 from pricepulse.scrapers.runet import RunetScraper
 from pricepulse.scrapers.wb import WildberriesScraper
-from pricepulse.scrapers.yandex_market import YandexMarketScraper  # noqa: F401
+from pricepulse.scrapers.yandex_market import YandexMarketScraper
 
 log = structlog.get_logger(__name__)
 
@@ -90,8 +90,7 @@ class SearchOrchestrator:
         self._registry: dict[SourceKind, ScraperProtocol] = adapters or {
             SourceKind.WB: WildberriesScraper(),
             SourceKind.OZON: OzonScraper(),
-            # Я.Маркет временно отключён — нужен резидентный RU-прокси-пул.
-            # SourceKind.YA_MARKET: YandexMarketScraper(),
+            SourceKind.YA_MARKET: YandexMarketScraper(),
             # RunetScraper fans out internally to Google Shopping +
             # Yandex SERP and merges the result under one banner.
             SourceKind.RUNET: RunetScraper(),
@@ -210,19 +209,31 @@ class SearchOrchestrator:
                 },
             ))
 
-        async def _drain() -> None:
-            await asyncio.gather(*[_drive(a) for a in adapters])
+        async def _emit_top_deals(*, with_reranker: bool) -> None:
             all_offer_count = sum(g.count for g in groups.values())
+            if all_offer_count == 0:
+                return
             top_deals = await _rank_top_deals(
                 list(groups.values()),
                 query_text=normalized.normalized or normalized.raw,
                 query_attrs=query_attrs,
-                reranker=self._reranker,
+                reranker=self._reranker if with_reranker else None,
                 reranker_top_n=self._reranker_top_n,
                 reranker_weight=self._reranker_weight,
-                top_k=max(10, all_offer_count),  # rank all for per-card relevance badges
+                top_k=max(10, all_offer_count),  # ранжируем все офферы — фронт сортирует по relevance
             )
             await queue.put(("top_deals", {"top_deals": [d.model_dump(mode="json") for d in top_deals]}))
+
+        async def _drain() -> None:
+            # Стримим top_deals инкрементально после каждого источника, чтобы
+            # фронт мог сортировать офферы по релевантности «вживую», а не
+            # ждать конца fan-out. Реранкер запускаем только в финальной волне
+            # — он дорогой и шумит для частичных результатов.
+            pending = [asyncio.create_task(_drive(a)) for a in adapters]
+            for task in asyncio.as_completed(pending):
+                await task
+                await _emit_top_deals(with_reranker=False)
+            await _emit_top_deals(with_reranker=True)
             await queue.put(None)
 
         drainer = asyncio.create_task(_drain())
@@ -497,7 +508,9 @@ async def _rank_top_deals(
         qconf = query_attrs.confidence if query_attrs else 0.0
         ranked.append((composite_rank_score(deal, relevance, qconf), deal, relevance, offer, breakdown))
 
-    ranked.sort(key=lambda item: (-item[0], float(item[3].price), -(item[3].rating or 0.0)))
+    # Дефолтная сортировка — только по релевантности (процент соответствия).
+    # Тайбрейкеры: composite (учитывает deal), затем цена, затем рейтинг.
+    ranked.sort(key=lambda item: (-item[2], -item[0], float(item[3].price), -(item[3].rating or 0.0)))
     top = [
         RankedOffer(
             offer=offer,

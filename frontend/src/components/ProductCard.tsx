@@ -18,37 +18,6 @@ const sourceClass: Record<string, string> = {
   runet: "source-dot-runet",
 };
 
-const colorLabel: Record<string, string> = {
-  black: "черный",
-  white: "белый",
-  blue: "синий",
-  red: "красный",
-  pink: "розовый",
-  green: "зеленый",
-  yellow: "желтый",
-  gray: "серый",
-  silver: "серебристый",
-  gold: "золотой",
-  purple: "фиолетовый",
-  orange: "оранжевый",
-};
-
-function attributeChips(offer: ProductOffer): string[] {
-  const a = offer.attributes;
-  if (!a) return [];
-  return [
-    a.model,
-    a.ram_gb ? `${a.ram_gb} ГБ RAM` : null,
-    a.storage_gb ? `${a.storage_gb} ГБ` : null,
-    a.color ? colorLabel[a.color] ?? a.color : null,
-    a.size,
-    a.season,
-    a.paper_format,
-    a.density_gm2 ? `${a.density_gm2} г/м²` : null,
-    a.sheets_count ? `${a.sheets_count} л.` : null,
-  ].filter((v): v is string => !!v).slice(0, 3);
-}
-
 function deliveryText(offer: ProductOffer): string | null {
   const d = offer.delivery;
   if (!d) return null;
@@ -91,7 +60,6 @@ export function ProductCard({ offer, index = 0, highlight, ranked }: Props) {
     offer.reviews_count != null
       ? String(offer.reviews_count)
       : offer.characteristics?.feedbacks;
-  const chips = attributeChips(offer);
   const delivery = deliveryText(offer);
   const rel = ranked ? relevanceMeta(ranked) : null;
 
@@ -192,15 +160,6 @@ export function ProductCard({ offer, index = 0, highlight, ranked }: Props) {
           )}
         </div>
 
-        {chips.length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {chips.map((chip) => (
-              <span key={chip} className="chip !px-2 !py-0.5 text-[11px]">
-                {chip}
-              </span>
-            ))}
-          </div>
-        )}
         {rel?.label && (
           <p className="text-[10px] leading-tight text-[var(--color-ink-4)] truncate mt-1">
             {rel.label}

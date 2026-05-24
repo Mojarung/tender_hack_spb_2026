@@ -70,6 +70,15 @@ _SPEC_SPLIT_RE = re.compile(r'data-auto="product-spec"')
 
 _MAX_SPEC_ENRICHMENTS = 10 ** 6
 
+# Антибот-страница «Похоже, вы используете VPN» — отдаётся с HTTP 200,
+# но без полезного контента. Размер ~22 КБ, заголовок содержит «VPN».
+_VPN_BLOCK_MARKER = "Похоже, вы&nbsp;используете&nbsp;VPN"
+
+# Параллелизм PDP-фетчей — иначе мы вспугнём anti-bot Яндекса. 4 одновременных
+# enrichments — компромисс между скоростью и риском получить «VPN block» волной.
+_PDP_PARALLEL = 4
+_REVIEWS_PARALLEL = 4
+
 # ──────────────────────────────────────── L1 helpers ─────────────────────────
 
 def build_search_url(query: str, *, region_id: int = 213) -> str:

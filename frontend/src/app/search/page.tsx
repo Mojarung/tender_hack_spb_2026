@@ -47,9 +47,10 @@ function scoreTone(percent: number): string {
   return "text-rose-700 bg-rose-50 border-rose-200";
 }
 
-type SortMode = "price_asc" | "price_desc" | "reviews_desc" | "reviews_asc";
+type SortMode = "relevance_desc" | "price_asc" | "price_desc" | "reviews_desc" | "reviews_asc";
 
 const SORT_LABEL: Record<SortMode, string> = {
+  relevance_desc: "По релевантности",
   price_asc:    "Сначала дешёвые",
   price_desc:   "Сначала дорогие",
   reviews_desc: "Больше отзывов",
@@ -257,7 +258,7 @@ function SearchInner() {
   const [numericRanges, setNumericRanges] = useState<Record<string, [number, number]>>({});
   const [stringFilters, setStringFilters] = useState<Record<string, Set<string>>>({});
   const [facetSearch, setFacetSearch] = useState<Record<string, string>>({});
-  const [sort, setSort] = useState<SortMode>("price_asc");
+  const [sort, setSort] = useState<SortMode>("relevance_desc");
   const [finishedSources, setFinishedSources] = useState<Set<Source>>(() => new Set());
   // Upstream "Did you mean X?" suggestion flow — kept alongside our filters.
   const [clarification, setClarification] = useState<QueryClarification | null>(null);
@@ -483,9 +484,22 @@ function SearchInner() {
     return true;
   });
 
-  // Sort filtered.
+  // Sort filtered. Релевантность берём из rankedByUrl (обновляется
+  // инкрементально по SSE-событиям top_deals от оркестратора), цена/отзывы —
+  // вычисляются прямо из оффера, чтобы сортировка работала даже до прихода
+  // первого top_deals.
+  const relevanceOf = (o: ProductOffer): number => {
+    const r = rankedByUrl.get(o.url);
+    if (!r) return -1;
+    return r.relevance_percent ?? Math.round((r.relevance_score ?? 0) * 100);
+  };
   const offers = [...filtered].sort((a, b) => {
     switch (sort) {
+      case "relevance_desc": {
+        const diff = relevanceOf(b) - relevanceOf(a);
+        if (diff !== 0) return diff;
+        return (offerPriceNum(a) || 0) - (offerPriceNum(b) || 0);
+      }
       case "price_asc":    return (offerPriceNum(a) || 0) - (offerPriceNum(b) || 0);
       case "price_desc":   return (offerPriceNum(b) || 0) - (offerPriceNum(a) || 0);
       case "reviews_desc": return (b.reviews_count ?? 0) - (a.reviews_count ?? 0);
@@ -545,85 +559,6 @@ function SearchInner() {
     <div className="flex flex-col lg:flex-row gap-6">
       <aside className="lg:w-[260px] shrink-0">
         <div className="card p-5 sticky top-20 max-h-[calc(100vh-6rem)] overflow-y-auto">
-          {/* Лучшие сделки — пинним наверх, до фильтров: жюри видит главное сразу. */}
-          {data?.top_deals?.length ? (
-            <div className="mb-5 pb-5 border-b border-[var(--color-line)]">
-              <div className="text-[11px] uppercase tracking-wider text-[var(--color-ink-4)] mb-3">Лучшие сделки</div>
-              <ol className="space-y-3">
-                {data.top_deals.slice(0, 3).map((d) => {
-                  const relPct = d.relevance_percent ?? (
-                    d.relevance_score != null ? Math.round(d.relevance_score * 100) : null
-                  );
-                  const reasons = d.selection_reasons ?? [];
-                  return (
-                    <li key={d.rank} className="text-sm rounded-lg border border-[var(--color-line)] bg-white/70 p-2.5">
-                      <div className="flex items-start gap-2.5">
-                        <span className="w-6 h-6 shrink-0 rounded-full bg-[var(--color-accent-50)] text-[var(--color-accent-2)] grid place-items-center text-[11px] font-bold">{d.rank}</span>
-                        <a
-                          href={d.offer.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="flex-1 truncate text-[var(--color-ink-2)] hover:text-[var(--color-accent-2)] font-medium"
-                          title={d.offer.name}
-                        >
-                          {d.offer.name}
-                        </a>
-                      </div>
-                      <div className="mt-1 ml-8 flex items-center gap-1.5 text-[11px] text-[var(--color-ink-4)]">
-                        <span>{SOURCE_LABEL[d.offer.source]}</span>
-                        <span>·</span>
-                        <span className="tabular-nums">{formatPrice(d.offer.price, d.offer.currency)}</span>
-                      </div>
-                      <div className="mt-2 ml-8 space-y-1">
-                        {relPct !== null && (
-                          <span
-                            className={`inline-flex w-fit rounded-md border px-2 py-1 text-[12px] font-semibold tabular-nums ${scoreTone(relPct)} ${
-                              relPct >= 85
-                                ? "bg-green-100 text-green-800"
-                                : relPct >= 60
-                                  ? "bg-yellow-100 text-yellow-800"
-                                  : "bg-red-100 text-red-800"
-                            }`}
-                            title="Соответствие запросу"
-                          >
-                            {relPct}%
-                          </span>
-                        )}
-                        {reasons.slice(0, 2).map((reason) => (
-                          <div key={reason} className="flex items-start gap-1.5 text-[11px] leading-snug text-[var(--color-ink-3)]">
-                            <CheckCircle2 className="w-3.5 h-3.5 mt-0.5 shrink-0 text-emerald-600" />
-                            <span>{reason}</span>
-                          </div>
-                        ))}
-                        {d.rerank_score != null && (
-                          <div className="flex items-center gap-1.5 text-[11px] leading-snug text-[var(--color-ink-4)]">
-                            <Sparkles className="w-3.5 h-3.5 shrink-0 text-[var(--color-accent)]" />
-                            <span>Реранкер: {Math.round(d.rerank_score * 100)}%</span>
-                          </div>
-                        )}
-                        {reasons.length === 0 && (d.match_signals ?? []).slice(0, 3).map((s) => (
-                          <span key={`m-${s}`} className="px-1.5 py-0.5 rounded bg-green-50 text-green-700 border border-green-200">
-                            ✓ {s}
-                          </span>
-                        ))}
-                        {reasons.length === 0 && (d.mismatch_signals ?? []).slice(0, 2).map((s) => (
-                          <span key={`x-${s}`} className="px-1.5 py-0.5 rounded bg-red-50 text-red-700 border border-red-200">
-                            ✗ {s}
-                          </span>
-                        ))}
-                        {reasons.length === 0 && (d.unknown_signals ?? []).slice(0, 2).map((s) => (
-                          <span key={`u-${s}`} className="px-1.5 py-0.5 rounded bg-gray-50 text-gray-600 border border-gray-200">
-                            ? {s}
-                          </span>
-                        ))}
-                      </div>
-                    </li>
-                  );
-                })}
-              </ol>
-            </div>
-          ) : null}
-
           <div className="flex items-center justify-between mb-3">
             <div className="text-xs uppercase tracking-wider text-[var(--color-ink-4)] font-medium">Фильтры</div>
             {activeFilters > 0 && (

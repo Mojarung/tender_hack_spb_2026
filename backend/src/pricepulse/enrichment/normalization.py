@@ -90,9 +90,17 @@ CHAR_KEY_ALIASES: dict[str, str] = {
     "листов": "sheets_count",
     # Tyres
     "ширина профиля": "tyre_width_mm",
+    "ширина профиля, мм": "tyre_width_mm",
+    "ширина": "tyre_width_mm",
+    "ширина шины": "tyre_width_mm",
     "высота профиля": "tyre_profile",
+    "высота профиля, %": "tyre_profile",
+    "высота": "tyre_profile",
     "посадочный диаметр": "tyre_rim_inch",
     "диаметр диска": "tyre_rim_inch",
+    "диаметр, дюймы": "tyre_rim_inch",
+    "диаметр": "tyre_rim_inch",
+    "радиус": "tyre_rim_inch",
     "сезонность": "season",
     "тип сезона": "season",
     "назначение": "_tyre_type",   # "зимние шины", "летние шины"
