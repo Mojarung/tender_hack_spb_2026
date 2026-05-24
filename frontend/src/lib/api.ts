@@ -1,7 +1,7 @@
 import { DEFAULT_REGION_ID } from "./regions";
 import type {
-  ChatResponse, Favorite, NormalizedQuery, ProductOffer, RankedOffer,
-  SearchResponse, Source, User, QueryClarification,
+  ChatResponse, Favorite, NormalizedQuery, PriceAlert, PriceWatch, ProductOffer,
+  QueryClarification, RankedOffer, SearchResponse, Source, User,
 } from "./types";
 
 type SearchStreamEventName =
@@ -54,10 +54,27 @@ export function proxyImage(url: string | null | undefined, source: string): stri
 }
 
 const STORAGE_KEY = "pp.jwt";
+const ANON_KEY = "pp.anon_id";
 
 export function getToken(): string | null {
   if (typeof window === "undefined") return null;
   return window.localStorage.getItem(STORAGE_KEY);
+}
+
+/** Stable per-browser identifier the watches endpoints use when there's
+ *  no JWT. Generated on first read, kept forever (cleared only when the
+ *  user manually wipes localStorage). */
+export function getAnonId(): string {
+  if (typeof window === "undefined") return "ssr-placeholder";
+  let v = window.localStorage.getItem(ANON_KEY);
+  if (!v) {
+    v = typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : Array.from(crypto.getRandomValues(new Uint8Array(16)))
+          .map((b) => b.toString(16).padStart(2, "0")).join("");
+    window.localStorage.setItem(ANON_KEY, v);
+  }
+  return v;
 }
 
 function setToken(t: string | null) {
@@ -74,6 +91,9 @@ async function http<T>(path: string, init: RequestInit = {}, expect = "json"): P
   };
   const t = getToken();
   if (t) headers.Authorization = `Bearer ${t}`;
+  // Always identify the browser so the watches endpoints work without
+  // a login. Backend ignores it when a valid JWT is present.
+  if (typeof window !== "undefined") headers["X-Anon-Id"] = getAnonId();
   Object.assign(headers, init.headers ?? {});
 
   const res = await fetch(BASE + path, { ...init, headers });
@@ -161,6 +181,35 @@ export const api = {
     };
 
     return { close: () => es.close() };
+  },
+
+  watches: {
+    list: () => http<PriceWatch[]>("/api/v1/watches"),
+    create: (b: { query: string; interval_min?: number; threshold_pct?: number; region_id?: number }) =>
+      http<PriceWatch>("/api/v1/watches", {
+        method: "POST",
+        body: JSON.stringify({
+          query: b.query,
+          interval_min: b.interval_min ?? 15,
+          threshold_pct: b.threshold_pct ?? 2.0,
+          region_id: b.region_id ?? DEFAULT_REGION_ID,
+        }),
+      }),
+    remove: (id: number) =>
+      http<void>(`/api/v1/watches/${id}`, { method: "DELETE" }),
+    alerts: (opts: { unread?: boolean; limit?: number } = {}) => {
+      const p = new URLSearchParams();
+      if (opts.unread) p.set("unread", "true");
+      if (opts.limit) p.set("limit", String(opts.limit));
+      const qs = p.toString();
+      return http<PriceAlert[]>(`/api/v1/watches/alerts${qs ? `?${qs}` : ""}`);
+    },
+    unreadCount: () =>
+      http<{ unread: number }>("/api/v1/watches/alerts/count"),
+    markRead: (id: number) =>
+      http<void>(`/api/v1/watches/alerts/${id}/read`, { method: "POST" }),
+    markAllRead: () =>
+      http<{ unread: number }>("/api/v1/watches/alerts/read-all", { method: "POST" }),
   },
 
   favorites: {

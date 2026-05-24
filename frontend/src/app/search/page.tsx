@@ -2,7 +2,8 @@
 
 import clsx from "clsx";
 import { motion } from "framer-motion";
-import { CornerDownLeft, Download, SearchX } from "lucide-react";
+import { Bell, BellOff, CornerDownLeft, Download, SearchX } from "lucide-react";
+import toast from "react-hot-toast";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
@@ -633,6 +634,7 @@ function SearchInner() {
             })()}
             <div className="flex items-center gap-3 mt-1.5 flex-wrap">
               <NmckExportButton query={q} regionId={region.id} disabled={loading || all.length < 3} />
+              <WatchToggleButton query={q} regionId={region.id} disabled={!q.trim()} />
               <label className="text-xs text-[var(--color-ink-4)] flex items-center gap-2">
                 Сортировка:
                 <select
@@ -898,6 +900,88 @@ function NmckExportButton({
     </div>
   );
 }
+
+/** "Следить за ценой" toggle. Looks up the user's watch list on mount;
+ *  shows BellOff when there's no matching watch yet, Bell (active) when
+ *  one already exists. On click: creates the watch (default 15 min /
+ *  ±2 %) or deletes it. After mutation we ping the WatchBell via the
+ *  `pp.watch.refresh` custom event so the badge updates immediately. */
+function WatchToggleButton({
+  query, regionId, disabled,
+}: {
+  query: string;
+  regionId: number;
+  disabled: boolean;
+}) {
+  const [watchId, setWatchId] = useState<number | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [initLoading, setInitLoading] = useState(true);
+  const queryRef = useRef(query);
+  queryRef.current = query;
+
+  // On query change, re-check whether a matching active watch exists.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setInitLoading(true);
+      try {
+        const all = await api.watches.list();
+        if (cancelled) return;
+        const match = all.find(
+          (w) => w.active && w.query.trim().toLowerCase() === queryRef.current.trim().toLowerCase(),
+        );
+        setWatchId(match ? match.id : null);
+      } catch {
+        setWatchId(null);
+      } finally {
+        if (!cancelled) setInitLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [query]);
+
+  async function onClick() {
+    if (loading) return;
+    setLoading(true);
+    try {
+      if (watchId != null) {
+        await api.watches.remove(watchId);
+        setWatchId(null);
+        toast("Слежение снято", { icon: "🔕" });
+      } else {
+        const w = await api.watches.create({ query, region_id: regionId });
+        setWatchId(w.id);
+        toast.success(`Слежу за «${query}» — пингну при изменении ≥ ${w.threshold_pct}%`);
+      }
+      window.dispatchEvent(new Event("pp.watch.refresh"));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message.slice(0, 80) : "не вышло");
+    } finally { setLoading(false); }
+  }
+
+  const active = watchId != null;
+  return (
+    <button
+      type="button"
+      disabled={disabled || initLoading || loading}
+      onClick={onClick}
+      title={active
+        ? "Снять с слежения — больше не буду присылать уведомления"
+        : "Следить за этим запросом — пингну, когда цена изменится"}
+      className={clsx(
+        "inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full transition-colors",
+        active
+          ? "bg-[color-mix(in_srgb,var(--color-good)_18%,transparent)] text-[var(--color-good)] hover:bg-[color-mix(in_srgb,var(--color-good)_28%,transparent)]"
+          : "bg-[var(--color-surface-2)] text-[var(--color-ink-3)] hover:bg-[var(--color-accent-50)] hover:text-[var(--color-accent-2)]",
+        "disabled:opacity-40 disabled:cursor-not-allowed",
+      )}
+    >
+      {active ? <Bell className="w-3.5 h-3.5" /> : <BellOff className="w-3.5 h-3.5" />}
+      {loading ? "…" : active ? "Слежу" : "Следить за ценой"}
+    </button>
+  );
+}
+
 
 function SourceCheck({
   checked, onToggle, label, count, error, group, currency, inFlight,

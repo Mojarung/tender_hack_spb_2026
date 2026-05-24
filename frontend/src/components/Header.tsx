@@ -13,6 +13,7 @@ import { history } from "@/lib/history";
 import { DEFAULT_REGION_ID, RUSSIA_REGIONS, getRegion } from "@/lib/regions";
 import { useHistory } from "@/lib/use-history";
 import { Logo } from "./Logo";
+import { WatchBell } from "./WatchBell";
 
 const REGION_STORAGE_KEY = "pp.region_id";
 
@@ -225,6 +226,7 @@ export function Header() {
         </Suspense>
 
         <nav className="flex items-center gap-2">
+          <WatchBell />
           <Link href="/favorites" className="btn btn-ghost !py-2 !px-3 rounded-full" aria-label="Избранное">
             <Heart className="w-4 h-4" />
           </Link>

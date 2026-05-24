@@ -100,6 +100,13 @@ class Settings(BaseSettings):
     ollama_vision_model: str = "gemma4:e4b"
     ollama_text_model: str = "qwen3.5:9b"
 
+    # Price-watch background loop — tick interval in seconds. Default 30s
+    # gives us roughly 60 checks/min ceiling against the stealth browser
+    # pool (per-tick cap lives in watcher/loop.py:WATCHER_PARALLEL).
+    watcher_tick_sec: int = 30
+    # Turn the loop off entirely in tests / minimal containers.
+    watcher_enabled: bool = True
+
     # Demo mode — pre-warm Redis cache for jury-known queries so the live
     # demo answers in <100 ms. Paid feature flags / cost-guard are gone —
     # nothing in the project hits a paid third-party service any more.

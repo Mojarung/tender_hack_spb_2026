@@ -35,6 +35,7 @@ from pricepulse.api.routes import (
     search,
     sentiment,
     stream,
+    watches,
 )
 from pricepulse.auth.schemas import UserCreate, UserRead, UserUpdate
 from pricepulse.auth.users import auth_backend, fastapi_users
@@ -92,8 +93,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         import structlog
         structlog.get_logger(__name__).warning("google_browser_prewarm_failed", error=repr(exc), exc_info=True)
 
+    # Background price-watch loop. Off-toggle via WATCHER_ENABLED for
+    # tests / minimal containers that don't have the orchestrator
+    # browsers warmed up. The task is cancelled cleanly on shutdown
+    # below.
+    watcher_task: asyncio.Task | None = None
+    if settings.watcher_enabled:
+        from pricepulse.watcher.loop import run_forever as watcher_run_forever
+        watcher_task = asyncio.create_task(watcher_run_forever(), name="price-watcher")
+
     yield
     # Tear singletons down cleanly on app exit.
+    if watcher_task is not None:
+        watcher_task.cancel()
+        try:
+            await watcher_task
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            import structlog
+            structlog.get_logger(__name__).warning("watcher_shutdown_failed", error=repr(exc))
     await close_search_cache()
     await close_rate_limiter()
     await close_browser_pool()
@@ -159,6 +178,7 @@ def create_app() -> FastAPI:
     app.include_router(nmck.router, prefix="/api/v1")
     app.include_router(explain.router, prefix="/api/v1")
     app.include_router(aspects.router, prefix="/api/v1")
+    app.include_router(watches.router, prefix="/api/v1")
 
     _instrument(app)
     return app
