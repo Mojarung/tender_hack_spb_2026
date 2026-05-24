@@ -2,10 +2,11 @@
 
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
-import { Clock, Heart, LogOut, MapPin, Search, Trash2, X } from "lucide-react";
+import { Camera, Clock, Heart, LogOut, MapPin, Search, Trash2, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
+import toast from "react-hot-toast";
 
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-hook";
@@ -35,7 +36,9 @@ function SearchBox() {
   const [q, setQ] = useState(params.get("q") ?? "");
   const [regionId, setRegionId] = useState(params.get("region_id") ?? String(DEFAULT_REGION_ID));
   const [open, setOpen] = useState(false);
+  const [photoBusy, setPhotoBusy] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => { setQ(params.get("q") ?? ""); }, [params]);
 
@@ -69,6 +72,26 @@ function SearchBox() {
     router.push(`/search?q=${encodeURIComponent(t)}&region_id=${regionId}`);
   }
 
+  async function onPhotoPicked(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";    // allow re-uploading the same file
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast.error("Это не картинка");
+      return;
+    }
+    setPhotoBusy(true);
+    const tid = toast.loading("AI смотрит на фото…");
+    try {
+      const res = await api.searchByImage(file);
+      toast.success(`Нашёл: «${res.query}»`, { id: tid });
+      setQ(res.query);
+      submit(res.query);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message.slice(0, 100) : "не вышло", { id: tid });
+    } finally { setPhotoBusy(false); }
+  }
+
   return (
     <div ref={wrapRef} className="flex-1 max-w-[640px] relative">
       <form onSubmit={(e) => { e.preventDefault(); submit(q); }}>
@@ -77,9 +100,26 @@ function SearchBox() {
           value={q}
           onFocus={() => setOpen(true)}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="iphone 15, macbook, кофемашина..."
-          className="input pl-11 pr-4 py-2.5 text-sm rounded-full"
+          placeholder="iphone 15, macbook, кофемашина…"
+          className="input pl-11 pr-12 py-2.5 text-sm rounded-full"
         />
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+          onChange={onPhotoPicked}
+          className="hidden"
+        />
+        <button
+          type="button"
+          onClick={() => fileRef.current?.click()}
+          disabled={photoBusy}
+          aria-label="Поиск по фото"
+          title="Поиск по фото — AI распознает товар и сформирует запрос"
+          className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 rounded-full text-[var(--color-ink-4)] hover:text-[var(--color-accent)] hover:bg-[var(--color-accent-50)] transition-colors disabled:opacity-40 disabled:cursor-wait"
+        >
+          <Camera className="w-4 h-4" />
+        </button>
       </form>
 
       <AnimatePresence>

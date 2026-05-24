@@ -142,6 +142,26 @@ export const api = {
       body: JSON.stringify({ query }),
     }),
 
+  /** Image → text-query via Gemma 4 vision. User uploads a product
+   *  photo, backend asks the model to describe it as a 3-7 word search
+   *  query in Russian, returns the string for the normal /search flow. */
+  searchByImage: async (file: File): Promise<{ query: string; used_model: string }> => {
+    const form = new FormData();
+    form.append("image", file);
+    const t = getToken();
+    const headers: Record<string, string> = {};
+    if (t) headers.Authorization = `Bearer ${t}`;
+    if (typeof window !== "undefined") headers["X-Anon-Id"] = getAnonId();
+    const res = await fetch(`${BASE}/api/v1/search/image`, {
+      method: "POST", body: form, headers,
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error(txt || `${res.status} ${res.statusText}`);
+    }
+    return await res.json();
+  },
+
   searchStream: (
     query: string,
     max_per_source = 16,

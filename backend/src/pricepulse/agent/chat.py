@@ -203,7 +203,16 @@ class ChatEngine:
         self._redis = redis
         settings = get_settings()
         self._url = settings.ollama_url.rstrip("/") + "/api/chat"
-        self._model = settings.ollama_vision_model
+        # Gemma 4 is multimodal — same model handles text chat, vision
+        # (image-to-query) and tool-calling. Keeping chat on it means
+        # one model warm in the cloud account instead of two.
+        self._model = settings.ollama_vision_model or settings.ollama_text_model
+        # Cloud Ollama (ollama.com) requires Bearer auth on every
+        # request — without this the engine 401s and the chat widget
+        # surfaces "502 chat engine failed: 401 …".
+        self._headers: dict[str, str] = {}
+        if settings.ollama_api_key:
+            self._headers["Authorization"] = f"Bearer {settings.ollama_api_key}"
 
     async def _load_history(self, session_id: str | None) -> list[ChatMessage]:
         if not session_id or self._redis is None:
@@ -238,7 +247,7 @@ class ChatEngine:
         tool_log: list[dict] = []
         tool_specs = [_tool_spec_for_ollama(t) for t in TOOLS.values()]
 
-        async with httpx.AsyncClient(timeout=120) as client:
+        async with httpx.AsyncClient(timeout=120, headers=self._headers) as client:
             for round_idx in range(max_tool_rounds + 1):
                 payload = {
                     "model": self._model,

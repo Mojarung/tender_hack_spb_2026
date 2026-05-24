@@ -28,6 +28,7 @@ from pricepulse.api.routes import (
     explain,
     favorites,
     health,
+    image_search,
     images,
     nmck,
     price_history,
@@ -178,6 +179,7 @@ def create_app() -> FastAPI:
     app.include_router(nmck.router, prefix="/api/v1")
     app.include_router(explain.router, prefix="/api/v1")
     app.include_router(aspects.router, prefix="/api/v1")
+    app.include_router(image_search.router, prefix="/api/v1")
     app.include_router(watches.router, prefix="/api/v1")
 
     _instrument(app)
