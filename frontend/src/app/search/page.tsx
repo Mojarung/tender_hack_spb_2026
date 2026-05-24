@@ -252,9 +252,10 @@ function SearchInner() {
   const [facetSearch, setFacetSearch] = useState<Record<string, string>>({});
   const [sort, setSort] = useState<SortMode>("price_asc");
   const [finishedSources, setFinishedSources] = useState<Set<Source>>(() => new Set());
-  // Keys we've already auto-initialized in numericRanges — prevents the
-  // useEffect from clobbering the user's drag mid-stream as new offers arrive.
-  const initedFacets = useRef<Set<string>>(new Set());
+  // Per-facet snapshot of the last (min,max) bounds we auto-pushed into
+  // numericRanges. Lets us detect "user moved the slider" vs "data grew"
+  // so we expand the range only when the user is still on the auto-bounds.
+  const facetBoundsRef = useRef<Map<string, [number, number]>>(new Map());
   // Upstream "Did you mean X?" suggestion flow — kept alongside our filters.
   const [clarification, setClarification] = useState<QueryClarification | null>(null);
   // Inline correction display while streaming — populated from query_normalized
@@ -299,7 +300,7 @@ function SearchInner() {
     setNumericRanges({});
     setFacetSearch({});
     setFinishedSources(new Set());
-    initedFacets.current = new Set();
+    facetBoundsRef.current = new Map();
 
     // `from` present ⇒ we're already showing the canonical query.
     const useNofix = nofix || !!from;
@@ -338,11 +339,16 @@ function SearchInner() {
           if (cancelled) return;
           setData((d) => {
             if (!d) return d;
-            const groups = d.groups.map((g) =>
-              g.source === e.source
-                ? { ...g, offers: appendOffer(g.offers, e.offer), count: g.offers.length + 1 }
-                : g,
-            );
+            // If `source_started` hasn't landed yet (rare with single-queue
+            // backend, but possible under EventSource buffering), spin up
+            // the group on the fly so the offer isn't silently dropped.
+            const exists = d.groups.some((g) => g.source === e.source);
+            const base = exists ? d.groups : [...d.groups, EMPTY_GROUP(e.source)];
+            const groups = base.map((g) => {
+              if (g.source !== e.source) return g;
+              const next = appendOffer(g.offers, e.offer);
+              return { ...g, offers: next, count: next.length };
+            });
             return { ...d, groups };
           });
         },
@@ -424,20 +430,31 @@ function SearchInner() {
   // Detect facets from current set. Cheap, runs every render.
   const facets = buildFacets(all);
 
-  // Auto-init numeric range for any facet we haven't seeded yet. This runs
-  // during render via the `initedFacets` ref guard — using useEffect would
-  // delay first paint and flash the wrong filter.
+  // Auto-init / auto-expand numeric ranges. During a streaming search the
+  // bounds grow as new sources arrive (e.g. WB returns prices 49–53k, then
+  // Ozon brings a 46k offer). If we *froze* the range on first sight, the
+  // late offer would silently fall outside the slider and disappear from
+  // the grid — exactly the "товары появляются только после reload" bug.
+  //
+  // Rule: while the user hasn't touched a slider (range still equals the
+  // previous min/max for that facet), keep expanding it as new data lands.
+  // Once they drag, the ref-set protects their selection.
   for (const f of facets) {
-    if (f.kind === "numeric" && !initedFacets.current.has(f.key)) {
-      initedFacets.current.add(f.key);
-      // Schedule outside of render to avoid setState-in-render warning,
-      // microtask is enough since React batches before next paint.
-      queueMicrotask(() => {
-        setNumericRanges((prev) =>
-          prev[f.key] ? prev : { ...prev, [f.key]: [f.min, f.max] },
-        );
+    if (f.kind !== "numeric") continue;
+    queueMicrotask(() => {
+      setNumericRanges((prev) => {
+        const cur = prev[f.key];
+        if (!cur) return { ...prev, [f.key]: [f.min, f.max] };
+        const prevBounds = facetBoundsRef.current.get(f.key);
+        // User dragged the slider iff cur != prevBounds (we recorded them).
+        const userDragged = !!prevBounds &&
+          (cur[0] !== prevBounds[0] || cur[1] !== prevBounds[1]);
+        if (userDragged) return prev;
+        if (cur[0] === f.min && cur[1] === f.max) return prev;
+        return { ...prev, [f.key]: [f.min, f.max] };
       });
-    }
+      facetBoundsRef.current.set(f.key, [f.min, f.max]);
+    });
   }
 
   // Apply all filters. Missing values are NEVER filter-out — they pass
