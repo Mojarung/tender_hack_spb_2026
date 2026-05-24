@@ -919,10 +919,13 @@ function WatchToggleButton({
   const queryRef = useRef(query);
   queryRef.current = query;
 
-  // On query change, re-check whether a matching active watch exists.
+  // Re-check whether a matching active watch exists. Re-runs on query
+  // change AND on the `pp.watch.refresh` event — without the latter,
+  // deleting the watch from the WatchBell would leave this button stuck
+  // in "Слежу", and the next click would 404 against a removed id.
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    async function check() {
       setInitLoading(true);
       try {
         const all = await api.watches.list();
@@ -932,12 +935,17 @@ function WatchToggleButton({
         );
         setWatchId(match ? match.id : null);
       } catch {
-        setWatchId(null);
+        if (!cancelled) setWatchId(null);
       } finally {
         if (!cancelled) setInitLoading(false);
       }
-    })();
-    return () => { cancelled = true; };
+    }
+    check();
+    window.addEventListener("pp.watch.refresh", check);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("pp.watch.refresh", check);
+    };
   }, [query]);
 
   async function onClick() {

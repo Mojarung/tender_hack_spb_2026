@@ -166,23 +166,6 @@ async def create_watch(
     return WatchRead.from_row(row)
 
 
-@router.delete("/{watch_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def remove_watch(
-    watch_id: int, db: SessionDep,
-    user: Annotated[User | None, Depends(_optional_user)] = None,
-    x_anon_id: Annotated[str | None, Header(alias="X-Anon-Id")] = None,
-) -> None:
-    owner = _owner_key(user, x_anon_id)
-    deleted = await db.execute(
-        delete(PriceWatch).where(
-            PriceWatch.id == watch_id, PriceWatch.owner_key == owner,
-        ),
-    )
-    if deleted.rowcount == 0:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="watch not found")
-    await db.commit()
-
-
 @router.get("/alerts", response_model=list[AlertRead])
 async def list_alerts(
     db: SessionDep,
@@ -225,16 +208,39 @@ async def mark_read(
     user: Annotated[User | None, Depends(_optional_user)] = None,
     x_anon_id: Annotated[str | None, Header(alias="X-Anon-Id")] = None,
 ) -> None:
+    """Idempotent. Re-marking an already-read or non-existent alert is
+    a no-op — the UI shouldn't surface a 404 just because the user
+    happened to click twice or the alert was deleted from another tab."""
     owner = _owner_key(user, x_anon_id)
-    res = await db.execute(
+    await db.execute(
         update(PriceAlert)
         .where(PriceAlert.id == alert_id, PriceAlert.owner_key == owner,
                PriceAlert.read_at.is_(None))
         .values(read_at=datetime.now(UTC)),
     )
-    if res.rowcount == 0:
-        # 204 is still fine — idempotent — but a stricter error helps debugging.
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="alert not found")
+    await db.commit()
+
+
+# DELETE /{watch_id} is declared LAST so concrete /alerts/* paths above
+# are matched first by Starlette. (Otherwise GET /watches/alerts could
+# never be reached because FastAPI checks paths in declaration order
+# and /alerts would also accept the path param.)
+@router.delete("/{watch_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_watch(
+    watch_id: int, db: SessionDep,
+    user: Annotated[User | None, Depends(_optional_user)] = None,
+    x_anon_id: Annotated[str | None, Header(alias="X-Anon-Id")] = None,
+) -> None:
+    """Idempotent. Returning 204 even when the watch was already
+    deleted (or never existed) keeps the UI simple: clicking «Снять
+    слежение» after the watch was wiped from another tab shouldn't
+    surface a confusing «not found»."""
+    owner = _owner_key(user, x_anon_id)
+    await db.execute(
+        delete(PriceWatch).where(
+            PriceWatch.id == watch_id, PriceWatch.owner_key == owner,
+        ),
+    )
     await db.commit()
 
 
