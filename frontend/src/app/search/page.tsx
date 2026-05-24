@@ -240,6 +240,10 @@ function SearchInner() {
   const q = (params.get("q") ?? "").trim();
   const from = (params.get("from") ?? "").trim();    // original user query (after a fix)
   const nofix = params.get("nofix") === "1";
+  // `confirmed=1` is added by handleClarificationSelect so we don't
+  // re-prompt the user with the same clarification card after they've
+  // picked a variant.
+  const confirmed = params.get("confirmed") === "1";
   const regionId = Number(params.get("region_id") ?? DEFAULT_REGION_ID);
   const region = getRegion(regionId);
   const [data, setData] = useState<SearchResponse | null>(null);
@@ -270,9 +274,11 @@ function SearchInner() {
     const isRawSearch = option.query.toLowerCase() === q.toLowerCase() || option.query === q;
     const sp = new URLSearchParams();
     sp.set("q", option.query);
-    if (isRawSearch) {
-      sp.set("nofix", "1");
-    }
+    // `confirmed=1` skips the clarification preflight on the next
+    // render — otherwise we'd ask the same question again. Raw-search
+    // also gets `nofix=1` so the spellfixer doesn't rewrite the literal.
+    sp.set("confirmed", "1");
+    if (isRawSearch) sp.set("nofix", "1");
     sp.set("region_id", String(region.id));
     router.push(`/search?${sp.toString()}`);
   };
@@ -287,11 +293,46 @@ function SearchInner() {
     }
 
     let cancelled = false;
-    setData({
-      query: { raw: q, normalized: q, expansions: [] },
-      groups: [], top_deals: [], took_ms: 0, partial: true,
-    });
-    setErr(null); setLoading(true); setLiveCorrection(null); setClarification(null);
+    let handle: { close: () => void } | null = null;
+
+    const startSearch = () => {
+      if (cancelled) return;
+      setData({
+        query: { raw: q, normalized: q, expansions: [] },
+        groups: [], top_deals: [], took_ms: 0, partial: true,
+      });
+      setLoading(true);
+      setClarification(null);
+      handle = streamSearchInner();
+    };
+
+    // ── Pre-flight ambiguity check ──
+    // Skip on `confirmed=1` (user already picked an interpretation),
+    // on raw-search escape (`nofix=1`) — both signals mean "just search,
+    // don't pester me again".
+    setErr(null); setLiveCorrection(null); setClarification(null);
+    if (confirmed || nofix) {
+      startSearch();
+    } else {
+      setLoading(true);
+      api.clarify(q).then((res) => {
+        if (cancelled) return;
+        if (res.is_ambiguous && res.options.length > 0) {
+          setClarification(res);
+          setLoading(false);    // wait for user pick
+        } else {
+          startSearch();
+        }
+      }).catch(() => {
+        // If clarify backend is down, gracefully fall through to search.
+        if (!cancelled) startSearch();
+      });
+    }
+
+    return () => { cancelled = true; handle?.close(); };
+
+    function streamSearchInner(): { close: () => void } {
+      setErr(null);
     // New query ⇒ stale filters would silently hide unrelated brands/sources.
     setSourceFilter(new Set());
     setStringFilters({});
@@ -305,7 +346,7 @@ function SearchInner() {
     // Capture the corrected query so we can canonicalize the URL after `done`.
     let normalizedCaptured = "";
 
-    const handle = api.searchStream(q, 16, {
+    return api.searchStream(q, 16, {
       nofix: useNofix,
       region_id: region.id,
       handlers: {
@@ -320,9 +361,12 @@ function SearchInner() {
             setLiveCorrection({ from: q, to: normalizedCaptured });
           }
         },
+        // Backend SSE may still emit a clarification mid-stream — we
+        // only set it if the user *hasn't* already moved past one
+        // (otherwise it'd reappear after their choice).
         onQueryClarified: (c) => {
-          if (cancelled) return;
-          setClarification(c);
+          if (cancelled || confirmed) return;
+          if (c.is_ambiguous && c.options.length > 0) setClarification(c);
         },
         onSourceStarted: (e) => {
           if (cancelled) return;
@@ -401,13 +445,9 @@ function SearchInner() {
         },
       },
     });
-
-    return () => {
-      cancelled = true;
-      handle.close();
-    };
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, nofix, region.id]);
+  }, [q, nofix, confirmed, region.id]);
 
   // Track whether we already seeded the sliders for THIS query — fires
   // exactly once per search, on the transition from loading → done.

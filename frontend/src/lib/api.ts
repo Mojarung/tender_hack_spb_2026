@@ -132,6 +132,16 @@ export const api = {
       }),
     }),
 
+  /** Cheap pre-flight: ask Gemma if the query is ambiguous (e.g.
+   *  "лодка и яблоко" mixes two unrelated products). The frontend
+   *  uses this BEFORE kicking off a full search so we don't waste a
+   *  multi-source scrape on a doomed literal query. */
+  clarify: (query: string) =>
+    http<QueryClarification>("/api/v1/search/clarify", {
+      method: "POST",
+      body: JSON.stringify({ query }),
+    }),
+
   searchStream: (
     query: string,
     max_per_source = 16,
