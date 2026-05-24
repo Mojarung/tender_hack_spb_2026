@@ -26,12 +26,17 @@ interface Props {
   query?: string;        // forwarded to the AI explainer
   allOffers?: ProductOffer[];   // forwarded to the AI explainer for context
   /** Median price within the same SourceGroup — used to flag offers
-   *  that fall ≥25 % below as «ДЕМПИНГ» per 44-ФЗ ст.37 (the buyer
-   *  must request extra performance bond from such a supplier). */
+   *  that fall sufficiently below as «ДЕМПИНГ» per 44-ФЗ ст.37 (the
+   *  buyer must request extra performance bond from such a supplier). */
   groupMedian?: number;
+  /** Total offer count in the source group — we require ≥5 before
+   *  trusting the median (small Runet groups with 2-3 items produce
+   *  noisy medians that flagged ordinary prices as dumping). */
+  groupOfferCount?: number;
 }
 
-export function ProductCard({ offer, index = 0, highlight, query, allOffers, groupMedian }: Props) {
+export function ProductCard({ offer, index = 0, highlight, query, allOffers, groupMedian, groupOfferCount }: Props) {
+  const [dumpExplain, setDumpExplain] = useState(false);
   const [fav, setFav] = useState(false);
   const [busy, setBusy] = useState(false);
   const [imgFailed, setImgFailed] = useState(false);
@@ -99,14 +104,89 @@ export function ProductCard({ offer, index = 0, highlight, query, allOffers, gro
             {(() => {
               const price = Number(offer.price);
               if (!groupMedian || !(price > 0)) return null;
+              // Need a statistically meaningful median — small groups
+              // (typical of niche Runet queries) produce wild swings.
+              if (!groupOfferCount || groupOfferCount < 5) return null;
               const dropPct = Math.round(((groupMedian - price) / groupMedian) * 100);
-              if (dropPct < 25) return null;
+              // Runet aggregates real retail shops (DNS / М.Видео /
+              // Эльдорадо) whose legitimate prices vary by 20-25%.
+              // Bump the threshold for Runet to avoid false flags.
+              const threshold = offer.source === "runet" ? 35 : 30;
+              if (dropPct < threshold) return null;
+              const medianStr = Math.round(groupMedian).toLocaleString("ru-RU");
+              return (
+                <span className="relative inline-block">
+                  <button
+                    type="button"
+                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); setDumpExplain((v) => !v); }}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 transition-colors cursor-pointer"
+                  >
+                    ⚠ ДЕМПИНГ −{dropPct}%
+                  </button>
+                  {dumpExplain && (
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      className="absolute z-30 mt-1 left-0 w-72 p-3 rounded-lg border border-red-200 bg-white shadow-lg text-[11px] leading-relaxed text-[var(--color-ink-2)]"
+                    >
+                      <div className="font-semibold text-red-700 mb-1.5">
+                        Почему здесь демпинг
+                      </div>
+                      <div className="space-y-1">
+                        <div>
+                          <span className="text-[var(--color-ink-4)]">Цена этого товара:</span>{" "}
+                          <span className="font-semibold tabular-nums">
+                            {Math.round(price).toLocaleString("ru-RU")} ₽
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-[var(--color-ink-4)]">Средняя по магазину:</span>{" "}
+                          <span className="font-semibold tabular-nums">{medianStr} ₽</span>
+                        </div>
+                        <div>
+                          <span className="text-[var(--color-ink-4)]">Разница:</span>{" "}
+                          <span className="font-semibold text-red-700">−{dropPct}%</span>
+                          {" "}(порог {threshold}%)
+                        </div>
+                      </div>
+                      <p className="mt-2 text-[var(--color-ink-3)]">
+                        По 44-ФЗ ст.37 если цена победителя ниже НМЦК на 25%,
+                        нужно повышенное обеспечение контракта (1.5×) или
+                        подтверждение добросовестности.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setDumpExplain(false)}
+                        className="mt-2 text-[10px] text-[var(--color-ink-4)] hover:text-[var(--color-ink-2)]"
+                      >
+                        Закрыть
+                      </button>
+                    </div>
+                  )}
+                </span>
+              );
+            })()}
+            {/* «X% совпадение» — query↔offer similarity from the
+                backend's relevance scorer (name + key chars). Coloured
+                green for ≥80, neutral for 60-79, muted for the rest
+                so the user can spot exact matches at a glance. */}
+            {(() => {
+              const rel = Number(offer.relevance ?? NaN);
+              if (!Number.isFinite(rel) || rel <= 0) return null;
+              const pct = Math.round(rel);
+              const color = pct >= 80
+                ? "bg-[color-mix(in_srgb,var(--color-good)_14%,white)] text-[var(--color-good)] border-[color-mix(in_srgb,var(--color-good)_30%,transparent)]"
+                : pct >= 60
+                  ? "bg-[var(--color-accent-50)] text-[var(--color-accent-2)] border-[var(--color-accent-100)]"
+                  : "bg-[var(--color-surface-2)] text-[var(--color-ink-4)] border-[var(--color-border)]";
               return (
                 <span
-                  title={`Цена ниже медианы ${Math.round(groupMedian).toLocaleString("ru-RU")} ₽ на ${dropPct}% — по 44-ФЗ ст.37 потребуется повышенное (1.5×) обеспечение контракта`}
-                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-50 text-red-700 border border-red-200"
+                  title="Насколько товар совпадает с вашим запросом (по названию и характеристикам)"
+                  className={clsx(
+                    "inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border tabular-nums",
+                    color,
+                  )}
                 >
-                  ⚠ ДЕМПИНГ −{dropPct}%
+                  {pct}% совпадение
                 </span>
               );
             })()}

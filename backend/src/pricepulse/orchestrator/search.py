@@ -18,6 +18,7 @@ from typing import Any
 import structlog
 
 from pricepulse.analytics.regional_pricing import adjust_offer_for_region
+from pricepulse.analytics.relevance import relevance_score
 from pricepulse.analytics.scoring import best_deal_score
 from pricepulse.antibot.cascade import CascadeRouter
 from pricepulse.antibot.ratelimit import RateLimiter
@@ -235,6 +236,11 @@ class SearchOrchestrator:
         region_id: int = 213,
     ) -> ScrapeResult:
         cache_key = f"cache:{adapter.source.value}:{region_id}:{normalized.normalized}:{limit}"
+        # Wrap the on_offer callback so relevance is computed BEFORE the
+        # offer is emitted to the SSE stream — otherwise the frontend
+        # would have to wait for the final source_finished event before
+        # it could sort by relevance.
+        scored_on_offer = _wrap_with_relevance(on_offer, normalized.raw or normalized.normalized)
         if self._cache is not None:
             try:
                 cached = await self._cache.get(cache_key)
@@ -243,7 +249,10 @@ class SearchOrchestrator:
                 cached = None
             if cached:
                 offers = [
-                    ProductOffer.model_validate(o).model_copy(update={"cached": True})
+                    _attach_relevance(
+                        ProductOffer.model_validate(o).model_copy(update={"cached": True}),
+                        normalized.raw or normalized.normalized,
+                    )
                     for o in cached.get("offers", [])
                 ]
                 if on_offer is not None:
@@ -255,7 +264,7 @@ class SearchOrchestrator:
             task = self._inflight.get(cache_key)
             if task is None:
                 task = asyncio.create_task(
-                    self._fetch_source(adapter, normalized, limit, on_offer, region_id)
+                    self._fetch_source(adapter, normalized, limit, scored_on_offer, region_id)
                 )
                 self._inflight[cache_key] = task
                 owner = True
@@ -372,6 +381,18 @@ class SearchOrchestrator:
                 cached=result.cached,
             )
 
+        # Compute query-to-offer similarity once per offer — used by the
+        # frontend's "По соответствию" sort + the small "% совпадение"
+        # badge. Idempotent: model_copy never strips earlier fields.
+        if result.offers:
+            raw_q = normalized.raw or normalized.normalized
+            result = ScrapeResult(
+                source=result.source,
+                offers=[_attach_relevance(o, raw_q) for o in result.offers],
+                error=result.error,
+                cached=result.cached,
+            )
+
         # Feed the cascade router — repeated blocks escalate the anti-bot layer.
         layer = self._cascade.layer_for(adapter.source)
         ok = bool(result.offers) and not result.error
@@ -407,6 +428,27 @@ class SearchOrchestrator:
 
 
 _CENTS = Decimal("0.01")
+
+
+def _attach_relevance(offer: ProductOffer, query: str) -> ProductOffer:
+    """Compute and attach a 0-100 similarity score against the user's
+    query. No-op when relevance is already set (e.g. SSE callback
+    pre-scored it before the final list was assembled)."""
+    if offer.relevance is not None:
+        return offer
+    score = relevance_score(query, offer.name, offer.characteristics or {})
+    return offer.model_copy(update={"relevance": score})
+
+
+def _wrap_with_relevance(on_offer, query: str):
+    """Decorator: ensure every offer crossing the SSE boundary has a
+    relevance score. The base callback can stay relevance-unaware."""
+    if on_offer is None:
+        return None
+
+    async def _wrapped(offer: ProductOffer) -> None:
+        await on_offer(_attach_relevance(offer, query))
+    return _wrapped
 
 # Per-source review-count keys. Adapters use different names; the
 # Best-Deal score needs a uniform integer regardless of source.

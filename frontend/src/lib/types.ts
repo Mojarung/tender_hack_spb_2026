@@ -32,6 +32,11 @@ export interface ProductOffer {
   reviews_count: number | null;
   fetched_at: string;
   cached: boolean;
+  // Similarity to the user's query (0-100), computed in the
+  // orchestrator. null when the offer came via a path that skipped
+  // scoring (e.g. some tests). Frontend renders it as a small
+  // "X% совпадение" pill and can sort by it.
+  relevance?: number | null;
 }
 
 export interface SourceGroup {

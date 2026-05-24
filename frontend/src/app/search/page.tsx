@@ -43,9 +43,10 @@ function parseFirstNumber(raw: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-type SortMode = "price_asc" | "price_desc" | "reviews_desc" | "reviews_asc";
+type SortMode = "relevance" | "price_asc" | "price_desc" | "reviews_desc" | "reviews_asc";
 
 const SORT_LABEL: Record<SortMode, string> = {
+  relevance:    "По соответствию",
   price_asc:    "Сначала дешёвые",
   price_desc:   "Сначала дорогие",
   reviews_desc: "Больше отзывов",
@@ -256,7 +257,9 @@ function SearchInner() {
   const [numericRanges, setNumericRanges] = useState<Record<string, [number, number]>>({});
   const [stringFilters, setStringFilters] = useState<Record<string, Set<string>>>({});
   const [facetSearch, setFacetSearch] = useState<Record<string, string>>({});
-  const [sort, setSort] = useState<SortMode>("price_asc");
+  // Default to relevance — the user wanted "rank by how well the
+  // offer matches the query" to be the headline ordering, not price.
+  const [sort, setSort] = useState<SortMode>("relevance");
   const [finishedSources, setFinishedSources] = useState<Set<Source>>(() => new Set());
   // Upstream "Did you mean X?" suggestion flow — kept alongside our filters.
   const [clarification, setClarification] = useState<QueryClarification | null>(null);
@@ -488,11 +491,13 @@ function SearchInner() {
   // Per-source median — used by ProductCard's "ДЕМПИНГ −X%" badge.
   // A standalone helper so the empty-array case is just `undefined`.
   const medianByGroup = new Map<Source, number>();
+  const sizeByGroup = new Map<Source, number>();
   for (const g of data?.groups ?? []) {
     const ps = g.offers.map((o) => Number(o.price)).filter((n) => n > 0).sort((a, b) => a - b);
     if (ps.length === 0) continue;
     const mid = Math.floor(ps.length / 2);
     medianByGroup.set(g.source, ps.length % 2 ? ps[mid] : (ps[mid - 1] + ps[mid]) / 2);
+    sizeByGroup.set(g.source, ps.length);
   }
 
   // Detect facets from current set. Cheap, runs every render.
@@ -525,6 +530,11 @@ function SearchInner() {
   // Sort filtered.
   const offers = [...filtered].sort((a, b) => {
     switch (sort) {
+      case "relevance":
+        // Higher relevance first; ties broken by lower price so the
+        // top result still feels like "best deal that matches".
+        return (Number(b.relevance ?? 0) - Number(a.relevance ?? 0))
+            || ((offerPriceNum(a) || 0) - (offerPriceNum(b) || 0));
       case "price_asc":    return (offerPriceNum(a) || 0) - (offerPriceNum(b) || 0);
       case "price_desc":   return (offerPriceNum(b) || 0) - (offerPriceNum(a) || 0);
       case "reviews_desc": return (b.reviews_count ?? 0) - (a.reviews_count ?? 0);
@@ -778,6 +788,7 @@ function SearchInner() {
                   query={liveCorrection?.to ?? q}
                   allOffers={all}
                   groupMedian={medianByGroup.get(o.source)}
+                  groupOfferCount={sizeByGroup.get(o.source)}
                 />
               ))}
             </div>

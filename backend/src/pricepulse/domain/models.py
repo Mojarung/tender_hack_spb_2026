@@ -35,6 +35,11 @@ class ProductOffer(BaseModel):
     reviews_count: int | None = None
     fetched_at: datetime
     cached: bool = False
+    # Similarity to the user's query, 0-100. Computed in the orchestrator
+    # after the scraper returns the offer — depends on name + key
+    # characteristics matching the query tokens. None means the score
+    # wasn't computed (e.g. cached path, tests).
+    relevance: float | None = Field(default=None, ge=0.0, le=100.0)
 
 
 class SourceGroup(BaseModel):
