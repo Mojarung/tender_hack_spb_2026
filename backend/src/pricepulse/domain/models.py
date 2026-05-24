@@ -141,11 +141,16 @@ class ProductOffer(BaseModel):
     price: Decimal
     currency: str = "RUB"
     url: HttpUrl
-    image: HttpUrl | None = None
+    # `image` / `images` are strings (not HttpUrl) so we can also carry
+    # `data:image/...;base64,...` placeholders — Google Shopping ships
+    # those instantly + swaps to gstatic CDN on scroll. Better to display
+    # the inline thumb than fall back to the initials tile when only the
+    # base64 version has loaded by the time we extract.
+    image: str | None = None
     # Full product gallery — main image first. `image` is kept as the
     # "cover" alias for the card thumbnail; `images` is for the detail
     # modal carousel. Other scrapers may leave this empty.
-    images: list[HttpUrl] = Field(default_factory=list)
+    images: list[str] = Field(default_factory=list)
     characteristics: dict[str, str] = Field(default_factory=dict)
     canonical_characteristics: CanonicalProduct | None = None
     attributes: ProductAttributes | None = None

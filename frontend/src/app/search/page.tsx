@@ -259,9 +259,6 @@ function SearchInner() {
   const [facetSearch, setFacetSearch] = useState<Record<string, string>>({});
   const [sort, setSort] = useState<SortMode>("price_asc");
   const [finishedSources, setFinishedSources] = useState<Set<Source>>(() => new Set());
-  // Keys we've already auto-initialized in numericRanges — prevents the
-  // useEffect from clobbering the user's drag mid-stream as new offers arrive.
-  const initedFacets = useRef<Set<string>>(new Set());
   // Upstream "Did you mean X?" suggestion flow — kept alongside our filters.
   const [clarification, setClarification] = useState<QueryClarification | null>(null);
   // Inline correction display while streaming — populated from query_normalized
@@ -307,7 +304,6 @@ function SearchInner() {
     setNumericRanges({});
     setFacetSearch({});
     setFinishedSources(new Set());
-    initedFacets.current = new Set();
 
     // `from` present ⇒ we're already showing the canonical query.
     const useNofix = nofix || !!from;
@@ -346,11 +342,16 @@ function SearchInner() {
           if (cancelled) return;
           setData((d) => {
             if (!d) return d;
-            const groups = d.groups.map((g) =>
-              g.source === e.source
-                ? { ...g, offers: appendOffer(g.offers, e.offer), count: g.offers.length + 1 }
-                : g,
-            );
+            // If `source_started` hasn't landed yet (rare with single-queue
+            // backend, but possible under EventSource buffering), spin up
+            // the group on the fly so the offer isn't silently dropped.
+            const exists = d.groups.some((g) => g.source === e.source);
+            const base = exists ? d.groups : [...d.groups, EMPTY_GROUP(e.source)];
+            const groups = base.map((g) => {
+              if (g.source !== e.source) return g;
+              const next = appendOffer(g.offers, e.offer);
+              return { ...g, offers: next, count: next.length };
+            });
             return { ...d, groups };
           });
         },
@@ -419,6 +420,27 @@ function SearchInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, nofix, region.id]);
 
+  // Track whether we already seeded the sliders for THIS query — fires
+  // exactly once per search, on the transition from loading → done.
+  const seededForQueryRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (loading || !data) return;
+    if (seededForQueryRef.current === q) return;
+    seededForQueryRef.current = q;
+    // Use the latest data — recompute facets so we see all offers, not
+    // a stale snapshot.
+    const allOffers = data.groups.flatMap((g) => g.offers);
+    const finalFacets = buildFacets(allOffers);
+    setNumericRanges((prev) => {
+      const next: Record<string, [number, number]> = { ...prev };
+      for (const f of finalFacets) {
+        if (f.kind !== "numeric") continue;
+        if (!next[f.key]) next[f.key] = [f.min, f.max];
+      }
+      return next;
+    });
+  }, [loading, data, q]);
+
   if (!q) {
     return (
       <div className="card p-12 text-center">
@@ -436,22 +458,6 @@ function SearchInner() {
 
   // Detect facets from current set. Cheap, runs every render.
   const facets = buildFacets(all);
-
-  // Auto-init numeric range for any facet we haven't seeded yet. This runs
-  // during render via the `initedFacets` ref guard — using useEffect would
-  // delay first paint and flash the wrong filter.
-  for (const f of facets) {
-    if (f.kind === "numeric" && !initedFacets.current.has(f.key)) {
-      initedFacets.current.add(f.key);
-      // Schedule outside of render to avoid setState-in-render warning,
-      // microtask is enough since React batches before next paint.
-      queueMicrotask(() => {
-        setNumericRanges((prev) =>
-          prev[f.key] ? prev : { ...prev, [f.key]: [f.min, f.max] },
-        );
-      });
-    }
-  }
 
   // Apply all filters. Missing values are NEVER filter-out — they pass
   // through so a price-only filter doesn't hide products without brand etc.
@@ -712,8 +718,9 @@ function SearchInner() {
                 : `Найдено ${all.length} предложений · ${region.name}`}
           </p>
           {region.id !== DEFAULT_REGION_ID && !loading && (
-            <p className="text-[11px] text-[var(--color-ink-4)] mt-1 italic">
-              регион применяется к Я.Маркету; WB / Ozon / Рунет показывают общий каталог
+            <p className="text-[11px] text-[var(--color-accent-2)] mt-1 inline-flex items-center gap-1.5 bg-[var(--color-accent-50)] px-2 py-0.5 rounded-full">
+              <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)]" />
+              цены адаптированы под регион «{region.name}»
             </p>
           )}
 

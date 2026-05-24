@@ -25,26 +25,19 @@ Live-validated in ``runet_research/05_jsonld_enrichment.py``.
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import html as html_lib
 import re
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
-from urllib.parse import unquote, urljoin, urlparse
+from urllib.parse import quote_plus, urlparse
 
 import orjson
 import structlog
 
+from pricepulse.antibot.google_browser import get_google_browser
 from pricepulse.antibot.yandex_browser import get_yandex_browser
 from pricepulse.domain.enums import SourceKind
-from pricepulse.domain.models import NormalizedQuery, ProductAttributes, ProductOffer
-from pricepulse.enrichment.attributes import (
-    extract_offer_attributes,
-    extract_query_attributes,
-    is_attribute_conflict,
-    merge_attributes,
-)
+from pricepulse.domain.models import NormalizedQuery, ProductOffer
 from pricepulse.observability.metrics import (
     scrape_duration_seconds,
     scrape_offers_returned_total,
@@ -53,6 +46,35 @@ from pricepulse.observability.metrics import (
 from pricepulse.scrapers.base import OnOffer, ScrapeResult
 
 log = structlog.get_logger(__name__)
+
+# Yandex `lr` region_id → city name in locative case ("купить в <X>").
+# Default 213 (Москва) is intentionally absent: appending "купить в Москве"
+# would NARROW results (Москва is already SERP's default geo); for the
+# default region we just send the bare query.
+# Covers the top-12 regions for which WB also has dest codes — overlap is
+# intentional so the same 12 cities power both adapters.
+_REGION_LOCATIVE: dict[int, str] = {
+    2:   "Санкт-Петербурге",
+    54:  "Екатеринбурге",       # Свердловская область
+    65:  "Новосибирске",
+    35:  "Краснодаре",
+    43:  "Казани",              # Татарстан
+    47:  "Нижнем Новгороде",
+    39:  "Ростове-на-Дону",
+    172: "Уфе",
+    51:  "Самаре",
+    193: "Воронеже",
+    50:  "Перми",
+}
+
+
+def _maybe_geo_query(query: str, region_id: int) -> str:
+    """Append "купить в <city>" for known non-default regions; otherwise
+    return the query unchanged. Yandex SERP then favours regional shops
+    (spb.dns-shop.ru, ekb.mvideo.ru, regional Apple-stores, etc.)."""
+    city = _REGION_LOCATIVE.get(region_id)
+    return f"{query} купить в {city}" if city else query
+
 
 # Marketplaces already represented by other adapters — never count them
 # as the "4th source", per methodology criterion 3 (25/100).
@@ -64,113 +86,6 @@ _EXCLUDED_HOSTS: frozenset[str] = frozenset({
     "aliexpress.ru", "aliexpress.com",
     "goods.ru",
     "lamoda.ru", "www.lamoda.ru",
-})
-
-# Russian-segment TLDs. Anything outside is rejected: foreign shops
-# usually have foreign currency that we'd mis-tag as RUB.
-_ALLOWED_TLDS: tuple[str, ...] = (
-    ".ru", ".su", ".рф", ".xn--p1ai",  # .рф punycode
-    ".by", ".kz",
-)
-
-# JSON-LD currency codes that count as RUB.
-_RUB_CURRENCIES: frozenset[str] = frozenset({"RUB", "RUR", "643", "₽"})
-
-# Curated pool of proven RU shops. Their URLs from SearXNG get bumped to
-# the front of the fetch queue, so even when SearXNG returns a mix of
-# blogs / forums / unknown shops, the actual product cards are tried
-# first. Order = priority (higher = first).
-_SHOP_POOL: tuple[str, ...] = (
-    # Apple / electronics specialists — clean per-product JSON-LD
-    "re-store.ru", "biggeek.ru", "cmstore.ru", "pitergsm.ru", "gbstore.ru",
-    "i-point.ru", "doctorhead.ru",
-    # Big-box electronics
-    "mvideo.ru", "eldorado.ru", "technopark.ru", "dns-shop.ru",
-    "citilink.ru", "holodilnik.ru", "onlinetrade.ru", "ситилинк.рф",
-    # Office / printers / cartridges
-    "foroffice.ru", "komus.ru", "officemag.ru", "sima-land.ru",
-    # Tires
-    "koleso.ru", "kolesa-darom.ru", "shinservice.ru", "4tochki.ru",
-    "rossko.ru", "shinatorg.ru",
-    # Apparel
-    "poizonshop.ru", "kupivip.ru", "respect-shoes.ru", "sneakerhead.ru",
-    "rendez-vous.ru", "spasibo.ru",
-    # Generic price aggregators with reliable JSON-LD per offer
-    "e-katalog.ru", "n-katalog.ru", "price.ru",
-)
-
-# Provider-level discovery seeds. These are domains/sitemaps, not product or
-# query hardcodes. They cover the jury categories and let the Runet source keep
-# working when public SearXNG upstreams are blocked.
-_PROVIDER_SITEMAPS: tuple[str, ...] = (
-    # Tyres
-    "https://koleso.ru/sitemap.xml",
-    "https://www.kolesa-darom.ru/sitemapxml/moskva/sitemap_index.xml",
-    "https://www.4tochki.ru/external_upload/sitemaps/www.4tochki.ru/sitemap-index.xml",
-    "https://www.shinservice.ru/sitemap.xml",
-    # Office / printers / cartridges / paper
-    "https://www.kns.ru/sitemap.xml",
-    "https://cartridge.ru/sitemap.xml",
-    "https://global-cartridge.ru/sitemap_200_5573.xml",
-    "https://www.officemag.ru/sitemap/sitemap.xml",
-    "https://komus.com/sitemap.xml",
-    "https://www.onliner.by/sitemap.xml",
-    "https://foroffice.ru/sitemap.xml",
-    # Apparel / shoes
-    "https://groupprice.ru/sitemap.xml",
-    "https://respect-shoes.ru/sitemap.xml",
-    "https://street-beat.ru/sitemap/sitemap.xml",
-    "https://sneakerhead.ru/sitemap.xml",
-    "https://www.rendez-vous.ru/sitemap.xml",
-    # Electronics
-    "https://doctorhead.ru/sitemap/sitemap-standart.xml",
-    "https://cmstore.ru/sitemap.xml",
-    "https://pitergsm.ru/sitemap.xml",
-    "https://www.technopark.ru/sitemap.xml",
-)
-
-_SITEMAP_LOC_RE = re.compile(r"<loc>\s*(.*?)\s*</loc>", re.IGNORECASE | re.DOTALL)
-_PRODUCT_URL_MARKERS = re.compile(
-    r"/(?:product|products|catalog|katalog|tovar|item|goods|shop|p|card|shiny|tyres|tires|bumaga|paper|kartridj|kartridzh|printer)/",
-    re.IGNORECASE,
-)
-_BAD_URL_MARKERS = re.compile(
-    r"/(?:search|cart|basket|compare|favorite|favorites|login|register|blog|news|article|brand|brands)(?:/|$)",
-    re.IGNORECASE,
-)
-_PRICE_TEXT_RE = re.compile(r"(?:от\s*)?(\d[\d\s\xa0]{2,})\s*(?:₽|руб\.?|р\.)", re.IGNORECASE)
-_META_RE_TEMPLATE = r'<meta[^>]+(?:property|name|itemprop)=["\']{key}["\'][^>]+content=["\']([^"\']+)["\']'
-_META_RE_TEMPLATE_REV = r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name|itemprop)=["\']{key}["\']'
-_NEXT_DATA_RE = re.compile(
-    r'<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>', re.IGNORECASE | re.DOTALL,
-)
-_DIGITAL_DATA_RE = re.compile(
-    r'window\.digitalData\s*=\s*(\{.*?\})\s*;', re.IGNORECASE | re.DOTALL,
-)
-_NUXT_DATA_RE = re.compile(
-    r'window\.__(?:NUXT|PRELOADED_STATE|INITIAL_STATE)__\s*=\s*(\{.*?\})\s*;', re.IGNORECASE | re.DOTALL,
-)
-_MICRODATA_SCOPE_RE = re.compile(
-    r'<[^>]+itemscope[^>]+itemtype=["\'][^"\']*schema\.org/Product["\'][^>]*>',
-    re.IGNORECASE,
-)
-_MICRODATA_PROP_RE = re.compile(
-    r'<[^>]+itemprop=["\'](\w+)["\'][^>]*(?:content=["\']([^"\']*)["\']|>([^<]*)(?=<))',
-    re.IGNORECASE,
-)
-
-# Plausible RU consumer-good price range. Anything outside is almost
-# certainly a categorical aggregate ("starting from 100 ₽") or a typo
-# ("9 999 999 ₽" for a printer). Keeps mins/avgs sane.
-_MIN_PRICE = Decimal(150)
-_MAX_PRICE = Decimal(2_000_000)
-
-# Tokens excluded from the "name must contain a query token" relevance
-# check. Russian + English low-content words.
-_STOPWORDS: frozenset[str] = frozenset({
-    "и", "в", "на", "с", "от", "до", "по", "для", "the", "a", "an",
-    "купить", "цена", "оригинал", "оригинальный", "новый", "руб", "рублей",
-    "москва", "санкт", "петербург", "спб",
 })
 
 _HEADERS = {
@@ -193,28 +108,12 @@ def _is_excluded(url: str) -> bool:
     return any(host == ex or host.endswith("." + ex) for ex in _EXCLUDED_HOSTS)
 
 
-def _is_russian_tld(url: str) -> bool:
-    """Reject obvious non-RU shops (currys.co.uk, jabko.ua, ...) up-front.
-
-    Foreign sites usually price in a non-RUB currency that we'd silently
-    relabel as RUB, polluting min/avg/median in the Best-Deal block.
-    """
-    host = urlparse(url).netloc.lower()
-    if not host:
-        return False
-    return any(host.endswith(tld) for tld in _ALLOWED_TLDS)
-
-
 def _walk_jsonld(html: str) -> list[dict[str, Any]]:
-    """Yield every JSON-LD payload that could plausibly *be* a single
-    product card.
+    """Pull every JSON-LD payload out of a page, recursively expanding
+    container shapes (arrays, @graph, ItemList → itemListElement, mainEntity).
 
-    We expand ``@graph`` and ``mainEntity`` (those wrap a single product
-    in a top-level container), but **deliberately do not expand
-    ``itemListElement``** — that's an ItemList enumerating the children
-    of a category page, and pulling its first child gave us bugs like
-    "HP printer for 9 266 ₽" when the actual page was a printers
-    catalogue, not a product card.
+    Many shops nest the Product inside ItemList / ListItem wrappers, so a
+    flat walk would miss them.
     """
     raw_blocks: list[Any] = []
     for match in _JSONLD_RE.finditer(html):
@@ -241,6 +140,15 @@ def _walk_jsonld(html: str) -> list[dict[str, Any]]:
         graph = node.get("@graph")
         if isinstance(graph, list):
             stack.extend(graph)
+        ile = node.get("itemListElement")
+        if isinstance(ile, list):
+            for entry in ile:
+                if isinstance(entry, dict):
+                    inner = entry.get("item")
+                    if isinstance(inner, (dict, list)):
+                        stack.append(inner)
+                    else:
+                        stack.append(entry)
         me = node.get("mainEntity")
         if isinstance(me, (dict, list)):
             stack.append(me)
@@ -254,145 +162,39 @@ def _is_product(payload: dict[str, Any]) -> bool:
     return type_ == "Product"
 
 
-def _is_category_listing(payload: dict[str, Any]) -> bool:
-    """True if the JSON-LD block is an explicit category container.
-
-    We *don't* treat `Product` + `AggregateOffer` as a category: shops
-    like campioshop.ru use that shape to encode size/colour variants of
-    a single t-shirt. The price extraction layer below mines the nested
-    `offers.offers[]` when the top-level price is absent, so a real
-    multi-variant product still produces an offer.
-    """
-    t = payload.get("@type")
-    types = t if isinstance(t, list) else [t]
-    listing = {"ItemList", "CollectionPage", "OfferCatalog", "BreadcrumbList"}
-    return any(x in listing for x in types)
-
-
-def _currency_ok(raw: Any) -> bool:
-    """True if the offer currency is RUB / RUR / 643 / ₽, or absent.
-
-    Absent currency is permitted because many small RU shops omit the
-    `priceCurrency` field; the TLD whitelist (`_is_russian_tld`) makes
-    that assumption safe.
-    """
-    if raw is None:
-        return True
-    s = str(raw).strip().upper()
-    if not s:
-        return True
-    return s in _RUB_CURRENCIES
-
-
-def _parse_decimal(raw: Any) -> Decimal | None:
-    if raw is None:
-        return None
-    cleaned = re.sub(r"[^\d.]", "", str(raw).replace(",", "."))
-    if not cleaned:
-        return None
-    try:
-        return Decimal(cleaned)
-    except (ValueError, ArithmeticError):
-        return None
-
-
-def _parse_price_text(text: str) -> Decimal | None:
-    cleaned = re.sub(r"[^\d]", "", text)
-    if not cleaned:
-        return None
-    try:
-        value = Decimal(cleaned)
-    except ArithmeticError:
-        return None
-    return value if _MIN_PRICE <= value <= _MAX_PRICE else None
-
-
-def _walk_offer_prices(node: Any) -> list[Decimal]:
-    """Collect every concrete RUB ``price`` value reachable from a
-    Schema.org Offer / AggregateOffer node.
-
-    Two real-world shapes drove this:
-
-    * Plain ``Offer`` with ``price``.
-    * ``AggregateOffer`` with no top-level price, ``offers[]`` of
-      per-variant ``Offer`` objects (size/colour SKUs) each with their
-      own ``price`` — as on campioshop.ru, kupivip.ru, etc.
-
-    ``lowPrice`` / ``highPrice`` are deliberately *not* picked up here:
-    they're shop-wide range markers that historically poisoned the
-    "printer for 1M ₽" case. The min-of-children rule below gives us a
-    safe equivalent of `lowPrice` for genuine multi-variant products
-    without admitting category-wide ranges.
-    """
-    if node is None:
-        return []
-    if isinstance(node, list):
-        out: list[Decimal] = []
-        for n in node:
-            out.extend(_walk_offer_prices(n))
-        return out
-    if not isinstance(node, dict):
-        return []
-    if not _currency_ok(node.get("priceCurrency")):
-        return []
-    prices: list[Decimal] = []
-    direct = _parse_decimal(node.get("price"))
-    if direct is not None:
-        prices.append(direct)
-    nested = node.get("offers")
-    if isinstance(nested, (list, dict)):
-        prices.extend(_walk_offer_prices(nested))
-    return prices
-
-
 def _price_from(payload: dict[str, Any]) -> Decimal | None:
-    """Pull a single, concrete RUB price out of a Schema.org Product block.
-
-    Strategy: collect every concrete ``price`` value reachable through
-    ``Offer`` / ``AggregateOffer.offers[]`` nesting, then return the
-    minimum (matches "from X ₽" semantics shops use when a product has
-    multiple variants). ``lowPrice`` / ``highPrice`` are never used —
-    those are category-wide ranges, not per-variant prices.
-    """
-    candidates: list[Decimal] = []
-    candidates.extend(_walk_offer_prices(payload.get("offers")))
-    if _currency_ok(payload.get("priceCurrency")):
-        top = _parse_decimal(payload.get("price"))
-        if top is not None:
-            candidates.append(top)
-    valid = [p for p in candidates if _MIN_PRICE <= p <= _MAX_PRICE]
-    return min(valid) if valid else None
+    """Pull a RUB price out of a Schema.org Product / Offer block."""
+    candidates: list[Any] = []
+    offers = payload.get("offers")
+    if isinstance(offers, dict):
+        candidates += [offers.get("price"), offers.get("lowPrice")]
+    elif isinstance(offers, list):
+        for off in offers:
+            if isinstance(off, dict):
+                candidates += [off.get("price"), off.get("lowPrice")]
+    candidates.append(payload.get("price"))
+    for c in candidates:
+        if c is None:
+            continue
+        cleaned = re.sub(r"[^\d.]", "", str(c).replace(",", "."))
+        if not cleaned:
+            continue
+        try:
+            return Decimal(cleaned)
+        except (ValueError, ArithmeticError):
+            continue
+    return None
 
 
 def _image_from(payload: dict[str, Any]) -> str | None:
-    """Pick the first usable image URL from a Schema.org Product.
-
-    Handles every shape we've seen: bare string, list of strings, list of
-    objects, `ImageObject` with `url` / `contentUrl` / `@id` (the last
-    one is the JSON-LD "node identifier", which on most shops is the
-    real image URL).
-    """
-    def normalise(value: Any) -> str | None:
-        if isinstance(value, str):
-            v = value.strip()
-            if v.startswith("//"):
-                v = "https:" + v
-            return v if v.startswith(("http://", "https://")) else None
-        if isinstance(value, dict):
-            for key in ("contentUrl", "url", "@id"):
-                got = normalise(value.get(key))
-                if got is not None:
-                    return got
-        return None
-
     image = payload.get("image")
     if isinstance(image, list):
-        for item in image:
-            got = normalise(item)
-            if got is not None:
-                return got
-        return None
-    return normalise(image)
+        image = image[0] if image else None
+    if isinstance(image, dict):
+        image = image.get("url")
+    if isinstance(image, str) and image.startswith(("http://", "https://")):
+        return image
+    return None
 
 
 def _brand_from(payload: dict[str, Any]) -> str:
@@ -404,523 +206,83 @@ def _brand_from(payload: dict[str, Any]) -> str:
     return ""
 
 
-def _extract_text(value: Any) -> str:
-    if isinstance(value, str):
-        return re.sub(r"\s+", " ", value).strip()
-    if isinstance(value, (int, float, Decimal)):
-        return str(value)
-    if isinstance(value, dict):
-        for key in ("name", "value", "text", "description"):
-            text = _extract_text(value.get(key))
-            if text:
-                return text
-    return ""
-
-
-def _characteristics_from(payload: dict[str, Any], url: str) -> dict[str, str]:
-    chars = {
-        "site": urlparse(url).netloc,
-        "brand": _brand_from(payload),
-    }
-    for key in ("sku", "model", "mpn", "description"):
-        text = _extract_text(payload.get(key))
-        if text:
-            chars[key] = text[:500]
-
-    offers = payload.get("offers")
-    if isinstance(offers, dict):
-        availability = _extract_text(offers.get("availability"))
-        if availability:
-            chars["availability"] = availability.rsplit("/", 1)[-1]
-        seller = offers.get("seller")
-        seller_name = _extract_text(seller)
-        if seller_name:
-            chars["seller"] = seller_name
-
-    props = payload.get("additionalProperty") or payload.get("additionalProperties")
-    if isinstance(props, dict):
-        props = [props]
-    if isinstance(props, list):
-        for item in props:
-            if not isinstance(item, dict):
-                continue
-            name = _extract_text(item.get("name") or item.get("propertyID"))
-            value = _extract_text(item.get("value") or item.get("description"))
-            if name and value:
-                chars[name[:80]] = value[:300]
-    return {k: v for k, v in chars.items() if v}
-
-
-_TOKEN_RE = re.compile(r"[\w\d]+", re.UNICODE)
-
-
-def _tokenize(text: str) -> set[str]:
-    """Lower-case alpha-numeric tokens with stopwords stripped.
-
-    Length floor is 2 (not 3) so model designators like ``s24`` / ``m3``
-    / ``15`` survive — those are usually the only distinguishing token
-    for a relevance match.
-    """
-    return {
-        t for t in (m.group().lower() for m in _TOKEN_RE.finditer(text))
-        if len(t) >= 2 and t not in _STOPWORDS
-    }
-
-
-def _name_matches_query(name: str, query_tokens: set[str]) -> bool:
-    """The product name must overlap the search query by at least one
-    meaningful token. Otherwise we're picking up a wholly unrelated card
-    that happened to be linked from the page (e.g. "Recommended for you"
-    blocks on category pages).
-    """
-    if not query_tokens:
-        return True
-    name_tokens = _tokenize(name)
-    matched = name_tokens & query_tokens
-    if not matched:
-        return False
-    # Model/size tokens are the discriminators: "iphone 15 128" must not
-    # match iPhone 14/16 just because "iphone" and "128" overlap; tyre
-    # sizes must preserve 205/55/r16 as well.
-    strong_tokens = {t for t in query_tokens if any(ch.isdigit() for ch in t)}
-    if strong_tokens:
-        # Allow "128" to match "128gb", "r16" to match "r16c", etc. —
-        # unit suffixes are stripped in the name but preserved in the query.
-        def _strong_covered(tok: str) -> bool:
-            return tok in name_tokens or any(nt.startswith(tok) for nt in name_tokens)
-        if not all(_strong_covered(t) for t in strong_tokens):
-            return False
-    latin_tokens = {t for t in query_tokens if len(t) >= 3 and re.fullmatch(r"[a-z]+", t)}
-    if latin_tokens and not latin_tokens <= name_tokens:
-        return False
-    overlap = len(matched) / len(query_tokens)
-    # When all strong/numeric tokens are present, the product is a plausible
-    # match even if Russian adjectives (зимние, шипованные) don't appear in
-    # the product title. Lower the threshold so "шины R15 зимние" matches
-    # "Nokian Nordman 185/65 R15 88T шипованная".
-    threshold = 0.3 if strong_tokens else 0.5
-    return overlap >= threshold
-
-
-def _query_url_score(url: str, query_tokens: set[str]) -> float:
-    if not query_tokens:
-        return 0.0
-    path = unquote(urlparse(url).path).replace("-", " ").replace("_", " ").lower()
-    url_tokens = _tokenize(path)
-    if not url_tokens:
-        return 0.0
-    strong_tokens = {t for t in query_tokens if any(ch.isdigit() for ch in t)}
-    if strong_tokens and not strong_tokens <= url_tokens:
-        return 0.0
-    matched = query_tokens & url_tokens
-    return len(matched) / len(query_tokens)
-
-
-def _looks_like_product_url(url: str) -> bool:
-    path = urlparse(url).path
-    if not _PRODUCT_URL_MARKERS.search(path) or _BAD_URL_MARKERS.search(path):
-        return False
-    # Brand/category landing pages are useful for discovery, but should not be
-    # treated as product URLs by the sitemap ranker. Product pages usually have
-    # a slug with model/article details, not just `/catalog/tyres/brand/r15/`.
-    parts = [p for p in path.strip("/").split("/") if p]
-    if len(parts) <= 4 and any(p.lower().startswith("r") and p[1:].isdigit() for p in parts):
-        return False
-    return True
-
-
-def _looks_like_search_query_url(url: str) -> bool:
-    """True only for in-shop *search-query* URLs (?q=… / ?text=… / etc.).
-
-    Category-root URLs are kept on purpose: many shops only expose the
-    JSON-LD product card via a category page that lists ``ItemList →
-    itemListElement[].item.url``. The runet scraper mines those children
-    in a second pass (see ``RunetScraper._fetch_with_listing_followup``)
-    rather than ignoring the category outright.
-    """
-    qs = (urlparse(url).query or "").lower()
-    return any(key + "=" in qs for key in ("q", "query", "search", "text", "find"))
-
-
-def _extract_listing_child_urls(payloads: list[dict[str, Any]]) -> list[str]:
-    """From a category page's JSON-LD, pull child-product URLs.
-
-    Most shops (koleso.ru, foroffice.ru, sportmaster.ru, …) ship an
-    ``ItemList`` whose ``itemListElement[].item.url`` points at the
-    actual product card. We collect those URLs in listing order so the
-    first few correspond to the shop's "top results" for the query.
-    """
-    out: list[str] = []
-    for payload in payloads:
-        ile = payload.get("itemListElement")
-        if not isinstance(ile, list):
-            continue
-        for entry in ile:
-            if not isinstance(entry, dict):
-                continue
-            item = entry.get("item")
-            url = None
-            if isinstance(item, dict):
-                url = item.get("url") or item.get("@id")
-            elif isinstance(item, str):
-                url = item
-            else:
-                url = entry.get("url") or entry.get("@id")
-            if isinstance(url, str) and url.startswith(("http://", "https://")):
-                out.append(url)
-    # de-dup while preserving order
-    seen: set[str] = set()
-    uniq: list[str] = []
-    for u in out:
-        if u not in seen:
-            seen.add(u)
-            uniq.append(u)
-    return uniq
-
-
-def _shop_priority(url: str) -> int:
-    """Lower number = fetched earlier. Curated shops outrank unknowns."""
-    host = urlparse(url).netloc.lower().removeprefix("www.")
-    for i, shop in enumerate(_SHOP_POOL):
-        if host == shop or host.endswith("." + shop):
-            return i
-    return len(_SHOP_POOL) + 1
-
-
-def _product_url_from(payload: dict[str, Any], fallback: str) -> str:
-    raw = payload.get("url")
-    if isinstance(raw, str) and raw.startswith(("http://", "https://")):
-        return raw
-    offers = payload.get("offers")
-    if isinstance(offers, list):
-        offers = offers[0] if offers and isinstance(offers[0], dict) else None
-    if isinstance(offers, dict):
-        raw = offers.get("url")
-        if isinstance(raw, str) and raw.startswith(("http://", "https://")):
-            return raw
-    return fallback
-
-
-def _meta_content(html: str, key: str) -> str | None:
-    escaped = re.escape(key)
-    for template in (_META_RE_TEMPLATE, _META_RE_TEMPLATE_REV):
-        match = re.search(template.format(key=escaped), html, flags=re.IGNORECASE | re.DOTALL)
-        if match:
-            return html_lib.unescape(match.group(1)).strip()
-    return None
-
-
-def _strip_tags(value: str) -> str:
-    return re.sub(r"\s+", " ", html_lib.unescape(re.sub(r"<[^>]+>", " ", value))).strip()
-
-
-def _html_title(html: str) -> str | None:
-    for key in ("og:title", "twitter:title"):
-        value = _meta_content(html, key)
-        if value:
-            return value
-    match = re.search(r"<h1[^>]*>(.*?)</h1>", html, flags=re.IGNORECASE | re.DOTALL)
-    if match:
-        text = _strip_tags(match.group(1))
-        if text:
-            return text
-    match = re.search(r"<title[^>]*>(.*?)</title>", html, flags=re.IGNORECASE | re.DOTALL)
-    if match:
-        text = _strip_tags(match.group(1))
-        return re.split(r"\s+[|—-]\s+", text)[0].strip() or None
-    return None
-
-
-def _html_image(html: str, page_url: str) -> str | None:
-    for key in ("og:image", "twitter:image", "image"):
-        value = _meta_content(html, key)
-        if value:
-            return urljoin(page_url, value.strip())
-    match = re.search(r'<img[^>]+(?:src|data-src)=["\']([^"\']+)["\']', html, flags=re.IGNORECASE)
-    if match:
-        value = html_lib.unescape(match.group(1)).strip()
-        if value and not value.startswith("data:"):
-            return urljoin(page_url, value)
-    return None
-
-
-def _html_price(html: str) -> Decimal | None:
-    meta_price = _meta_content(html, "product:price:amount") or _meta_content(html, "price")
-    price = _parse_decimal(meta_price)
-    if price is not None and _MIN_PRICE <= price <= _MAX_PRICE:
-        return price
-    visible = _strip_tags(html[:700_000])
-    prices = [p for match in _PRICE_TEXT_RE.finditer(visible) if (p := _parse_price_text(match.group(1))) is not None]
-    return min(prices) if prices else None
-
-
-def _html_characteristics(html: str, page_url: str) -> dict[str, str]:
-    chars: dict[str, str] = {"site": urlparse(page_url).netloc, "extraction_stage": "html"}
-    description = _meta_content(html, "description") or _meta_content(html, "og:description")
-    if description:
-        chars["description"] = description[:500]
-    for key, label in (("product:brand", "brand"), ("product:retailer_item_id", "sku")):
-        value = _meta_content(html, key)
-        if value:
-            chars[label] = value[:200]
-
-    # Generic table/dl specs. Good enough for KNS/Respect/Bitrix-style pages
-    # without adding site-specific parsers.
-    for left, right in re.findall(r"<tr[^>]*>\s*<t[hd][^>]*>(.*?)</t[hd]>\s*<td[^>]*>(.*?)</td>", html, re.I | re.S):
-        name = _strip_tags(left)
-        value = _strip_tags(right)
-        if name and value and len(name) <= 80:
-            chars.setdefault(name, value[:300])
-        if len(chars) >= 30:
-            break
-    if len(chars) < 8:
-        for left, right in re.findall(r"<dt[^>]*>(.*?)</dt>\s*<dd[^>]*>(.*?)</dd>", html, re.I | re.S):
-            name = _strip_tags(left)
-            value = _strip_tags(right)
-            if name and value and len(name) <= 80:
-                chars.setdefault(name, value[:300])
-            if len(chars) >= 30:
-                break
-    return {k: v for k, v in chars.items() if v}
-
-
-def _find_product_nodes(obj: Any, depth: int = 0) -> list[dict[str, Any]]:
-    """Recursively find objects that look like product nodes (name + price)."""
-    if depth > 7:
-        return []
-    results: list[dict[str, Any]] = []
-    if isinstance(obj, dict):
-        name_keys = {"name", "title", "productName", "product_name", "displayName"}
-        price_keys = {"price", "currentPrice", "finalPrice", "salePrice", "basePrice",
-                      "discountedPrice", "buyPrice", "amount"}
-        if obj.keys() & name_keys and obj.keys() & price_keys:
-            results.append(obj)
-        else:
-            for v in obj.values():
-                results.extend(_find_product_nodes(v, depth + 1))
-    elif isinstance(obj, list):
-        for item in obj[:20]:
-            results.extend(_find_product_nodes(item, depth + 1))
-    return results
-
-
-def _node_to_offer(
-    node: dict[str, Any],
-    page_url: str,
-    *,
-    query_tokens: set[str],
-    stage: str,
-) -> ProductOffer | None:
-    """Convert a generic product node (from __NEXT_DATA__ or digitalData) to ProductOffer."""
-    name_keys = ("name", "title", "productName", "product_name", "displayName")
-    price_keys = ("price", "currentPrice", "finalPrice", "salePrice", "basePrice",
-                  "discountedPrice", "buyPrice", "amount")
-    name = next((str(node[k]).strip() for k in name_keys if node.get(k)), None)
-    if not name or not _name_matches_query(name, query_tokens):
-        return None
-
-    raw_price = next((node[k] for k in price_keys if k in node), None)
-    price = _parse_decimal(raw_price)
-    if price is None or not (_MIN_PRICE <= price <= _MAX_PRICE):
-        return None
-
-    image_raw = node.get("image") or node.get("picture") or node.get("photo") or node.get("img")
-    if isinstance(image_raw, list):
-        image_raw = image_raw[0] if image_raw else None
-    if isinstance(image_raw, dict):
-        image_raw = image_raw.get("src") or image_raw.get("url") or image_raw.get("original")
-    image_url = urljoin(page_url, str(image_raw).strip()) if isinstance(image_raw, str) and image_raw else None
-
-    url_raw = node.get("url") or node.get("link") or node.get("href")
-    offer_url = urljoin(page_url, str(url_raw).strip()) if isinstance(url_raw, str) and url_raw else page_url
-
-    chars: dict[str, str] = {
-        "site": urlparse(page_url).netloc,
-        "extraction_stage": stage,
-    }
-    for k in ("brand", "sku", "article", "model", "description"):
-        v = node.get(k)
+def _chars_from_jsonld(payload: dict[str, Any]) -> dict[str, str]:
+    """Squeeze every safe attribute out of a Schema.org Product into a
+    flat characteristics dict. Strings only — the frontend facets the
+    dynamic ones automatically."""
+    out: dict[str, str] = {}
+    # Plain scalar fields most shops emit
+    for src_key, label in [
+        ("color", "Цвет"),
+        ("material", "Материал"),
+        ("model", "Модель"),
+        ("mpn", "Артикул"),
+        ("gtin", "Штрихкод"),
+        ("sku", "SKU"),
+        ("category", "Категория"),
+    ]:
+        v = payload.get(src_key)
         if isinstance(v, str) and v.strip():
-            chars[k] = v.strip()[:300]
-
-    try:
-        return ProductOffer(
-            source=SourceKind.RUNET,
-            name=name,
-            price=price,
-            currency="RUB",
-            url=offer_url,
-            image=image_url,
-            characteristics=chars,
-            seller=urlparse(page_url).netloc,
-            rating=None,
-            fetched_at=datetime.now(tz=UTC),
-            cached=False,
-        )
-    except Exception:
-        return None
-
-
-def _offers_from_next_data(
-    html: str, page_url: str, *, query_tokens: set[str],
-) -> list[ProductOffer]:
-    match = _NEXT_DATA_RE.search(html)
-    if not match:
-        return []
-    try:
-        data = orjson.loads(match.group(1))
-    except Exception:
-        return []
-    nodes = _find_product_nodes(data)
-    offers: list[ProductOffer] = []
-    seen: set[str] = set()
-    for node in nodes:
-        offer = _node_to_offer(node, page_url, query_tokens=query_tokens, stage="next_data")
-        if offer is None:
-            continue
-        key = str(offer.url)
-        if key in seen:
-            continue
-        seen.add(key)
-        offers.append(offer)
-        if len(offers) >= 5:
-            break
-    return offers
-
-
-def _offers_from_digital_data(
-    html: str, page_url: str, *, query_tokens: set[str],
-) -> list[ProductOffer]:
-    for pattern in (_DIGITAL_DATA_RE, _NUXT_DATA_RE):
-        match = pattern.search(html[:2_000_000])
-        if not match:
-            continue
-        try:
-            data = orjson.loads(match.group(1))
-        except Exception:  # noqa: S112
-            continue
-        nodes = _find_product_nodes(data)
-        offers: list[ProductOffer] = []
-        seen: set[str] = set()
-        for node in nodes:
-            offer = _node_to_offer(node, page_url, query_tokens=query_tokens, stage="digital_data")
-            if offer is None:
+            out[label] = v.strip()[:120]
+    # Dimensions / weight
+    if isinstance(payload.get("weight"), (str, int, float)):
+        out["Вес"] = str(payload["weight"])[:40]
+    # additionalProperty list — Schema.org's spec-table mechanism
+    extras = payload.get("additionalProperty")
+    if isinstance(extras, list):
+        for prop in extras[:30]:
+            if not isinstance(prop, dict):
                 continue
-            key = str(offer.url)
-            if key in seen:
-                continue
-            seen.add(key)
-            offers.append(offer)
-            if len(offers) >= 5:
-                break
-        if offers:
-            return offers
-    return []
-
-
-def _offers_from_microdata(
-    html: str, page_url: str, *, query_tokens: set[str],
-) -> list[ProductOffer]:
-    if not _MICRODATA_SCOPE_RE.search(html):
-        return []
-    props: dict[str, str] = {}
-    for m in _MICRODATA_PROP_RE.finditer(html[:1_000_000]):
-        prop = m.group(1).lower()
-        value = (m.group(2) or m.group(3) or "").strip()
-        value = html_lib.unescape(value)
-        if value and prop not in props:
-            props[prop] = value[:300]
-
-    name = props.get("name")
-    if not name or not _name_matches_query(name, query_tokens):
-        return []
-    price = _parse_decimal(props.get("price")) or _parse_decimal(props.get("lowprice"))
-    if price is None or not (_MIN_PRICE <= price <= _MAX_PRICE):
-        return []
-    image_raw = props.get("image")
-    image_url = urljoin(page_url, image_raw) if image_raw else None
-    chars: dict[str, str] = {
-        "site": urlparse(page_url).netloc,
-        "extraction_stage": "microdata",
-    }
-    for k in ("brand", "sku", "description", "model"):
-        if k in props:
-            chars[k] = props[k]
-    try:
-        offer = ProductOffer(
-            source=SourceKind.RUNET,
-            name=name,
-            price=price,
-            currency="RUB",
-            url=page_url,
-            image=image_url,
-            characteristics=chars,
-            seller=urlparse(page_url).netloc,
-            rating=None,
-            fetched_at=datetime.now(tz=UTC),
-            cached=False,
-        )
-    except Exception:
-        return []
-    return [offer]
-
-
-def _html_offer(page_url: str, html: str, *, query_tokens: set[str]) -> ProductOffer | None:
-    name = _html_title(html)
-    if not name or not _name_matches_query(name, query_tokens):
-        return None
-    price = _html_price(html)
-    if price is None:
-        return None
-    image = _html_image(html, page_url)
-    return ProductOffer(
-        source=SourceKind.RUNET,
-        name=name,
-        price=price,
-        currency="RUB",
-        url=page_url,
-        image=image,
-        characteristics=_html_characteristics(html, page_url),
-        seller=urlparse(page_url).netloc,
-        rating=None,
-        fetched_at=datetime.now(tz=UTC),
-        cached=False,
+            name = str(prop.get("name") or "").strip()
+            value = prop.get("value")
+            if isinstance(value, dict):
+                value = value.get("name") or value.get("value")
+            value = str(value or "").strip()
+            if name and value and name not in out:
+                out[name[:60]] = value[:120]
+    # Availability + condition
+    offers = payload.get("offers")
+    offer_block = offers if isinstance(offers, dict) else (
+        offers[0] if isinstance(offers, list) and offers and isinstance(offers[0], dict) else None
     )
+    if isinstance(offer_block, dict):
+        avail = offer_block.get("availability")
+        if isinstance(avail, str):
+            # Strip the Schema.org namespace prefix
+            out["Наличие"] = avail.rsplit("/", 1)[-1]
+        cond = offer_block.get("itemCondition")
+        if isinstance(cond, str):
+            out["Состояние"] = cond.rsplit("/", 1)[-1]
+    return out
 
 
-def _attribute_checked(offer: ProductOffer, query_attrs: ProductAttributes) -> ProductOffer | None:
-    offer_attrs = merge_attributes(offer.attributes, extract_offer_attributes(offer))
-    if query_attrs.confidence >= 0.3 and is_attribute_conflict(query_attrs, offer_attrs)[0]:
-        return None
-    return offer.model_copy(update={"attributes": offer_attrs})
-
-
-def _to_offer(
-    url: str,
-    payload: dict[str, Any],
-    *,
-    query_tokens: set[str],
-) -> ProductOffer | None:
+def _to_offer(url: str, payload: dict[str, Any]) -> ProductOffer | None:
     name = payload.get("name")
     if not isinstance(name, str) or not name.strip():
         return None
-    name = name.strip()
-    if not _name_matches_query(name, query_tokens):
-        return None
-    if _is_category_listing(payload):
-        return None
     price = _price_from(payload)
-    if price is None:
+    if price is None or price < Decimal(100):
         return None
+    site = urlparse(url).netloc
+    chars: dict[str, str] = {"Магазин": site}
+    brand = _brand_from(payload)
+    if brand:
+        chars["Бренд"] = brand
+    chars.update(_chars_from_jsonld(payload))
+    # Description goes into chars (truncated) so the frontend modal can
+    # show it as a regular characteristic row.
+    desc = payload.get("description")
+    if isinstance(desc, str) and desc.strip():
+        chars["Описание"] = desc.strip()[:500]
     return ProductOffer(
         source=SourceKind.RUNET,
-        name=name,
+        name=name.strip(),
         price=price,
         currency="RUB",
         url=url,
         image=_image_from(payload),
-        characteristics=_characteristics_from(payload, url),
-        seller=urlparse(url).netloc,
+        characteristics=chars,
+        seller=site,
         rating=None,
         fetched_at=datetime.now(tz=UTC),
         cached=False,
@@ -963,8 +325,168 @@ async def _fetch_jsonld_offer(
     return None
 
 
+# Seller-brand → (canonical domain, in-site search URL template). When we
+# have a template, the offer URL lands the user on a search page filtered
+# to the actual product title — much closer to a direct product link than
+# just the merchant homepage. `{q}` is the URL-encoded search phrase.
+_SHOP_MAP: dict[str, tuple[str, str | None]] = {
+    "эльдорадо":      ("eldorado.ru",          "https://www.eldorado.ru/search/?q={q}"),
+    "м.видео":        ("mvideo.ru",            "https://www.mvideo.ru/product-list-page?q={q}"),
+    "мвидео":         ("mvideo.ru",            "https://www.mvideo.ru/product-list-page?q={q}"),
+    "ситилинк":       ("citilink.ru",          "https://www.citilink.ru/search/?text={q}"),
+    "dns":            ("dns-shop.ru",          "https://www.dns-shop.ru/search/?q={q}"),
+    "днс":            ("dns-shop.ru",          "https://www.dns-shop.ru/search/?q={q}"),
+    "связной":        ("svyaznoy.ru",          "https://www.svyaznoy.ru/catalog?search_query={q}"),
+    "мтс":            ("mts.ru",               "https://shop.mts.ru/search/?q={q}"),
+    "билайн":         ("shop.beeline.ru",      "https://shop.beeline.ru/search?text={q}"),
+    "мегафон":        ("megafon.ru",           "https://moscow.shop.megafon.ru/search/?q={q}"),
+    "ростелеком":     ("shop.rt.ru",           "https://shop.rt.ru/search?q={q}"),
+    "озон":           ("ozon.ru",              "https://www.ozon.ru/search/?text={q}"),
+    "ozon":           ("ozon.ru",              "https://www.ozon.ru/search/?text={q}"),
+    "wildberries":    ("wildberries.ru",       "https://www.wildberries.ru/catalog/0/search.aspx?search={q}"),
+    "вайлдберриз":    ("wildberries.ru",       "https://www.wildberries.ru/catalog/0/search.aspx?search={q}"),
+    "яндекс маркет":  ("market.yandex.ru",     "https://market.yandex.ru/search?text={q}"),
+    "yandex market":  ("market.yandex.ru",     "https://market.yandex.ru/search?text={q}"),
+    "apple store":    ("re-store.ru",          "https://re-store.ru/search/?q={q}"),
+    "apple-market":   ("apple-market.ru",      "https://apple-market.ru/search/?q={q}"),
+    "фонмарт":        ("fonmart.ru",           "https://fonmart.ru/search/?q={q}"),
+    "техносила":      ("technosila.ru",        "https://www.technosila.ru/search?q={q}"),
+    "холодильник.ру": ("holodilnik.ru",        "https://www.holodilnik.ru/search/?q={q}"),
+    "holodilnik":     ("holodilnik.ru",        "https://www.holodilnik.ru/search/?q={q}"),
+    "сбермегамаркет": ("megamarket.ru",        "https://megamarket.ru/catalog/?q={q}"),
+    "мегамаркет":     ("megamarket.ru",        "https://megamarket.ru/catalog/?q={q}"),
+    "ашан":           ("auchan.ru",            "https://www.auchan.ru/catalog/?text={q}"),
+    "перекресток":    ("perekrestok.ru",       "https://www.perekrestok.ru/cat?search={q}"),
+    "пятёрочка":      ("5ka.ru",               "https://5ka.ru/search/?q={q}"),
+    "юлмарт":         ("ulmart.ru",            None),
+    "ноу-хау":        ("nbcom.ru",             None),
+    "лента":          ("lenta.com",            None),
+}
+
+# Generic fallback paths for domain-style sellers (biggeek.ru, mobilo4ka.ru,
+# iPhoneStores.ru, etc.). Most CMS-built shops accept one of these.
+_GENERIC_SEARCH_PATHS: tuple[str, ...] = (
+    "/search/?q={q}",
+    "/search?q={q}",
+    "/?s={q}",
+    "/catalog/search/?q={q}",
+)
+
+
+def _seller_to_url(seller: str | None, query: str) -> str | None:
+    """Best-effort PRODUCT URL from the seller string. Returns a search
+    page URL inside the merchant pre-filtered by the offer's title — that
+    almost always opens at the actual product card on top.
+    """
+    if not seller:
+        return None
+    from urllib.parse import quote_plus as _q
+    q = _q(query.strip())
+
+    # Known-brand mapping (with optional search-template)
+    s = seller.strip().lower()
+    for k, (dom, tpl) in _SHOP_MAP.items():
+        if k in s:
+            return tpl.format(q=q) if tpl else f"https://{dom}"
+
+    # Already a domain? Try generic search template.
+    cleaned = seller.strip().lstrip("@")
+    if re.match(r"^[a-z0-9][a-z0-9\-]+(\.[a-z]{2,})+$", cleaned, re.IGNORECASE):
+        return f"https://{cleaned}{_GENERIC_SEARCH_PATHS[0].format(q=q)}"
+    return None
+
+
+def _google_stub_to_offer(stub: dict[str, Any], query_for_fallback: str) -> ProductOffer | None:
+    """Build a ProductOffer straight from a Google Shopping card.
+
+    Google ships all the fields inline (title / price / seller / rating /
+    image / characteristics) so no per-shop fetch is needed. URL is a
+    Google search deep-link because the real merchant URL hides behind a
+    trusted-click handler (see google_research/03-04 probes)."""
+    title = (stub.get("title") or "").strip()
+    price_raw = stub.get("price")
+    if not title or not price_raw:
+        return None
+    try:
+        price = Decimal(str(price_raw))
+    except (ValueError, ArithmeticError):
+        return None
+    if price < Decimal(100):
+        return None
+    seller = (stub.get("seller") or "").strip() or None
+    rating = stub.get("rating")
+    try:
+        rating_f = float(rating) if rating is not None else None
+    except (TypeError, ValueError):
+        rating_f = None
+    reviews_count = stub.get("reviews_count")
+    try:
+        reviews_int = int(reviews_count) if reviews_count is not None else None
+    except (TypeError, ValueError):
+        reviews_int = None
+    image = stub.get("image")
+    # Keep both http (real gstatic CDN) and data: URIs — model accepts str
+    # so the inline base64 thumbnail renders on the frontend until lazy
+    # load swaps in the gstatic version.
+    image_str = image if isinstance(image, str) and image.startswith(("http", "data:image")) else None
+    chars: dict[str, str] = {}
+    if seller:
+        chars["Магазин"] = seller
+    extra = stub.get("chars") or {}
+    if isinstance(extra, dict):
+        for k, v in extra.items():
+            if isinstance(v, str) and v:
+                chars[str(k)] = v
+    # Prefer an in-shop search URL filtered by the offer title — most CMS-
+    # built Russian shops show the matching product card as the first hit.
+    # When the seller isn't a recognised brand AND doesn't look like a
+    # domain, fall back to the Google Shopping deep-link.
+    url = _seller_to_url(seller, title) or (
+        "https://www.google.com/search?tbm=shop&hl=ru&gl=ru&q="
+        + quote_plus(f"{title} {seller or ''} купить".strip())
+    )
+    _ = query_for_fallback   # reserved for future query-aware URL templates
+    try:
+        return ProductOffer(
+            source=SourceKind.RUNET,
+            name=title,
+            price=price,
+            currency="RUB",
+            url=url,
+            image=image_str,
+            seller=seller,
+            characteristics=chars,
+            rating=rating_f,
+            reviews_count=reviews_int,
+            fetched_at=datetime.now(tz=UTC),
+            cached=False,
+        )
+    except Exception as exc:
+        log.warning("runet.google_offer_validation_failed", title=title[:60], error=str(exc))
+        return None
+
+
+def _dedup_key(offer: ProductOffer) -> tuple[str, str]:
+    """Two offers from different sub-engines collapse to one if same shop
+    + same (case-folded) first-50-chars of title."""
+    seller = (offer.seller or "").lower().strip()
+    name = offer.name.lower().strip()[:50]
+    return (seller, name)
+
+
 class RunetScraper:
-    """4th source — Yandex SERP → non-marketplace candidates → JSON-LD."""
+    """4th source — Google Shopping + Yandex SERP, deduped under one banner.
+
+    Two parallel sub-engines:
+      1. Google Shopping (``google_browser``): rich product cards (price,
+         seller, rating, image, badges) inline — single browser pass, no
+         per-shop fetch.
+      2. Yandex SERP (``yandex_browser``): organic results, then JSON-LD
+         enrichment per merchant URL via curl_cffi. Lower hit-rate but
+         covers shops Google misses (re-store, biggeek …).
+
+    Results are merged + deduped by (seller, title_first_50).
+    """
 
     source: SourceKind = SourceKind.RUNET
 
@@ -977,127 +499,71 @@ class RunetScraper:
         self._timeout = timeout_s
         self._enrich_concurrency = enrich_concurrency
 
-    _FETCH_CONCURRENCY: int = 12
-
-    async def _discover_from_sitemaps(self, q: str, query_tokens: set[str], cache: Any) -> list[str]:
-        digest = hashlib.sha1(q.encode("utf-8"), usedforsecurity=False).hexdigest()
-        cache_key = f"runet:sitemap:{digest}"
-        cached = await cache.get(cache_key) if cache is not None else None
-        if isinstance(cached, list):
-            urls = [u for u in cached if isinstance(u, str)]
-            if urls:
-                log.debug("runet.sitemap_cache_hit", q=q, urls=len(urls))
-                return urls[: self._max_urls]
-
-        urls = await self._sitemap_corpus(cache)
-
-        ranked: list[tuple[float, str]] = []
-        seen: set[str] = set()
-        for url in urls:
-            if url in seen or _is_excluded(url) or not _is_russian_tld(url):
+    async def _yandex_subsearch(
+        self, q: str, geo_q: str, limit: int,
+    ) -> list[ProductOffer]:
+        """Run the legacy Yandex SERP → JSON-LD enrichment path."""
+        try:
+            browser = await get_yandex_browser()
+            serp = await browser.serp_search(geo_q)
+        except Exception as exc:
+            log.warning("runet.yandex_browser_failed", error=str(exc))
+            return []
+        if serp.get("error"):
+            log.warning("runet.yandex_serp_error", error=serp["error"])
+            return []
+        seen_hosts: set[str] = set()
+        stubs: list[dict[str, Any]] = []
+        for r in serp.get("products") or []:
+            url = r.get("url")
+            if not isinstance(url, str) or _is_excluded(url):
                 continue
-            seen.add(url)
-            score = _query_url_score(url, query_tokens)
-            if score > 0:
-                ranked.append((score, url))
-        ranked.sort(key=lambda item: (-item[0], _shop_priority(item[1]), item[1]))
-        result = [url for _, url in ranked[: self._max_urls]]
-        if result and cache is not None:
-            await cache.set(cache_key, result, ttl_seconds=6 * 3600)
-        log.info("runet.sitemap_discovery", returned=len(result), corpus=len(urls))
-        return result
-
-    async def _sitemap_corpus(self, cache: Any) -> list[str]:
-        cache_key = "runet:sitemap:corpus:v1"
-        cached = await cache.get(cache_key) if cache is not None else None
-        if isinstance(cached, list):
-            urls = [u for u in cached if isinstance(u, str)]
-            if urls:
-                log.debug("runet.sitemap_corpus_cache_hit", urls=len(urls))
-                return urls
-
-        urls: list[str] = []
-        child_sitemaps: list[str] = []
-        timeout = min(self._timeout, 6.0)
-        async with httpx.AsyncClient(headers=_HEADERS, timeout=timeout, follow_redirects=True) as client:
-            for sitemap_url in _PROVIDER_SITEMAPS:
-                try:
-                    resp = await client.get(sitemap_url)
-                    if resp.status_code != 200:
-                        continue
-                    body = resp.text[:800_000]
-                except (httpx.HTTPError, ValueError) as exc:
-                    log.debug("runet.sitemap_fetch_failed", url=sitemap_url, error=str(exc))
-                    continue
-                locs = [html_lib.unescape(m.group(1).strip()) for m in _SITEMAP_LOC_RE.finditer(body)]
-                child_sitemaps.extend([u for u in locs if "sitemap" in u.lower()][:6])
-                urls.extend(u for u in locs if _looks_like_product_url(u))
-
-            for sitemap_url in child_sitemaps[:60]:
-                try:
-                    resp = await client.get(sitemap_url)
-                    if resp.status_code != 200:
-                        continue
-                    body = resp.text[:1_200_000]
-                except (httpx.HTTPError, ValueError) as exc:
-                    log.debug("runet.sitemap_child_fetch_failed", url=sitemap_url, error=str(exc))
-                    continue
-                locs = [html_lib.unescape(m.group(1).strip()) for m in _SITEMAP_LOC_RE.finditer(body)]
-                urls.extend(u for u in locs if _looks_like_product_url(u))
-
-        result: list[str] = []
-        seen: set[str] = set()
-        for url in urls:
-            if url in seen or _is_excluded(url) or not _is_russian_tld(url):
+            host = urlparse(url).netloc.lower()
+            if host in seen_hosts:
                 continue
-            seen.add(url)
-            result.append(url)
-        if result and cache is not None:
-            await cache.set(cache_key, result, ttl_seconds=12 * 3600)
-        log.info("runet.sitemap_corpus_built", urls=len(result), raw=len(urls))
-        return result
-
-    async def _fetch_searxng(self, searxng_url: str, q: str) -> dict | None:
-        """Query SearXNG with one retry when the result set is empty.
-
-        SearXNG returns ``results: []`` plus an ``unresponsive_engines`` list
-        when its upstream engines hit captcha/rate-limits — that's most of
-        our instability. A short backoff between two attempts often lets
-        at least one engine recover (timeout engines retry instantly;
-        captcha-suspended ones still skip the second pass, but DDG/Google
-        timeouts frequently succeed second time).
-        """
-        params = {
-            "q": f"{q} купить цена",
-            "format": "json",
-            "language": "ru-RU",
-            "categories": "general",
-            "safesearch": 0,
-        }
-        for attempt in (1, 2):
-            try:
-                async with httpx.AsyncClient(
-                    headers=_HEADERS, timeout=self._timeout, follow_redirects=True,
-                ) as client:
-                    resp = await client.get(f"{searxng_url}/search", params=params)
-                    resp.raise_for_status()
-                    body = resp.json()
-            except (httpx.HTTPError, ValueError) as exc:
-                log.warning("runet.searxng_failed", attempt=attempt, error=str(exc))
-                if attempt == 2:
-                    return None
-                await asyncio.sleep(1.0)
-                continue
-            results = body.get("results") or []
-            if results:
-                return body
-            unresp = body.get("unresponsive_engines") or []
-            log.info(
-                "runet.searxng_empty", attempt=attempt, unresponsive=len(unresp),
+            seen_hosts.add(host)
+            stubs.append(r)
+        if not stubs:
+            return []
+        try:
+            from curl_cffi.requests import AsyncSession
+        except ImportError:    # pragma: no cover
+            return []
+        sem = asyncio.Semaphore(self._enrich_concurrency)
+        async def _bounded(stub: dict[str, Any], session: Any) -> ProductOffer | None:
+            async with sem:
+                return await _fetch_jsonld_offer(session, stub, self._timeout)
+        async with AsyncSession(impersonate="chrome", timeout=self._timeout) as session:
+            results = await asyncio.gather(
+                *(_bounded(s, session) for s in stubs[: limit * 3]),
+                return_exceptions=True,
             )
-            if attempt == 1:
-                await asyncio.sleep(1.2)
-        return body
+        out: list[ProductOffer] = []
+        for r in results:
+            if isinstance(r, BaseException) or r is None:
+                continue
+            out.append(r)
+        log.info("runet.yandex_subok", returned=len(out))
+        return out
+
+    async def _google_subsearch(self, q: str) -> list[ProductOffer]:
+        """Run the Google Shopping path. Single browser pass, no enrichment."""
+        try:
+            browser = await get_google_browser()
+            serp = await browser.shopping_search(q)
+        except Exception as exc:
+            log.warning("runet.google_browser_failed", error=str(exc))
+            return []
+        if serp.get("error"):
+            log.warning("runet.google_shopping_error", error=serp["error"])
+            return []
+        out: list[ProductOffer] = []
+        for stub in serp.get("products") or []:
+            offer = _google_stub_to_offer(stub, q)
+            if offer is not None:
+                out.append(offer)
+        log.info("runet.google_subok", returned=len(out))
+        return out
 
     async def search(
         self,
@@ -1111,80 +577,30 @@ class RunetScraper:
         if not q:
             return ScrapeResult(source=self.source, offers=[])
 
+        # Region-aware Yandex query: for non-default regions append
+        # "купить в <city>" so SERP returns regional shops.
+        geo_q = _maybe_geo_query(q, region_id)
+
         with scrape_duration_seconds.labels(source=self.source.value).time():
-            # 1) URL discovery — Yandex SERP through the stealth browser
-            try:
-                browser = await get_yandex_browser()
-                serp = await browser.serp_search(q)
-            except Exception as exc:
-                scrape_requests_total.labels(
-                    source=self.source.value, outcome="blocked", proxy_tier="browser",
-                ).inc()
-                log.warning("runet.yandex_browser_failed", error=str(exc))
-                return ScrapeResult(
-                    source=self.source, offers=[],
-                    error=f"Yandex SERP unavailable: {exc}",
-                )
-            if serp.get("error"):
-                return ScrapeResult(
-                    source=self.source, offers=[],
-                    error=f"Yandex SERP: {serp['error']}",
-                )
+            # Fan out to both sub-engines in parallel. Each returns offers
+            # or an empty list on any failure — never raises.
+            google_offers, yandex_offers = await asyncio.gather(
+                self._google_subsearch(q),
+                self._yandex_subsearch(q, geo_q, limit),
+            )
 
-            # Filter out marketplaces we cover natively + dedup by host
-            seen_hosts: set[str] = set()
-            stubs: list[dict[str, Any]] = []
-            for r in serp.get("products") or []:
-                url = r.get("url")
-                if not isinstance(url, str):
-                    continue
-                if _is_excluded(url):
-                    continue
-                host = urlparse(url).netloc.lower()
-                if host in seen_hosts:
-                    continue
-                seen_hosts.add(host)
-                stubs.append(r)
-            if not stubs:
-                scrape_requests_total.labels(
-                    source=self.source.value, outcome="ok", proxy_tier="browser",
-                ).inc()
-                log.info("runet.empty", reason="no non-marketplace SERP results")
-                return ScrapeResult(source=self.source, offers=[])
-
-            # 2) Enrichment — fan-out via curl_cffi (Chrome JA3) for JSON-LD.
-            #    Each call may 403/429/no-jsonld — those silently drop.
-            try:
-                from curl_cffi.requests import AsyncSession
-            except ImportError:    # pragma: no cover
-                return ScrapeResult(
-                    source=self.source, offers=[],
-                    error="curl_cffi not installed",
-                )
-
-            sem = asyncio.Semaphore(self._enrich_concurrency)
-
-            async def _bounded(stub: dict[str, Any], session: Any) -> ProductOffer | None:
-                async with sem:
-                    return await _fetch_jsonld_offer(session, stub, self._timeout)
-
-            async with AsyncSession(
-                impersonate="chrome", timeout=self._timeout,
-            ) as session:
-                results = await asyncio.gather(
-                    *(_bounded(s, session) for s in stubs[: limit * 3]),
-                    return_exceptions=True,
-                )
-
+            # Merge with dedup — Google's richer offers win when keys collide
+            # (full image / characteristics / inline rating).
+            seen: set[tuple[str, str]] = set()
             offers: list[ProductOffer] = []
-            for r in results:
-                if isinstance(r, BaseException):
+            for o in (*google_offers, *yandex_offers):
+                key = _dedup_key(o)
+                if key in seen:
                     continue
-                if r is None:
-                    continue
-                offers.append(r)
+                seen.add(key)
+                offers.append(o)
                 if on_offer is not None:
-                    await on_offer(r)
+                    await on_offer(o)
                 if len(offers) >= limit:
                     break
 
@@ -1194,7 +610,9 @@ class RunetScraper:
             scrape_offers_returned_total.labels(source=self.source.value).inc(len(offers))
             log.info(
                 "runet.ok",
-                returned=len(offers), urls_tried=len(stubs),
+                returned=len(offers),
+                from_google=len(google_offers),
+                from_yandex=len(yandex_offers),
             )
             return ScrapeResult(source=self.source, offers=offers)
 

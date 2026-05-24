@@ -13,6 +13,7 @@ from typing import Any
 
 import structlog
 
+from pricepulse.analytics.regional_pricing import adjust_offer_for_region
 from pricepulse.analytics.scoring import best_deal_score, composite_rank_score
 from pricepulse.antibot.cascade import CascadeRouter
 from pricepulse.antibot.ratelimit import RateLimiter
@@ -45,7 +46,7 @@ from pricepulse.scrapers.base import ScrapeResult, ScraperProtocol
 from pricepulse.scrapers.ozon import OzonScraper
 from pricepulse.scrapers.runet import RunetScraper
 from pricepulse.scrapers.wb import WildberriesScraper
-from pricepulse.scrapers.yandex_market import YandexMarketScraper
+from pricepulse.scrapers.yandex_market import YandexMarketScraper  # noqa: F401
 
 log = structlog.get_logger(__name__)
 
@@ -89,7 +90,10 @@ class SearchOrchestrator:
         self._registry: dict[SourceKind, ScraperProtocol] = adapters or {
             SourceKind.WB: WildberriesScraper(),
             SourceKind.OZON: OzonScraper(),
-            SourceKind.YA_MARKET: YandexMarketScraper(),
+            # Я.Маркет временно отключён — нужен резидентный RU-прокси-пул.
+            # SourceKind.YA_MARKET: YandexMarketScraper(),
+            # RunetScraper fans out internally to Google Shopping +
+            # Yandex SERP and merges the result under one banner.
             SourceKind.RUNET: RunetScraper(),
         }
         self._cache = cache
@@ -317,15 +321,25 @@ class SearchOrchestrator:
     ) -> ScrapeResult:
         await self._limiter.acquire(adapter.source.value, self._rpm.get(adapter.source, 30))
 
-        async def enriched_on_offer(offer: ProductOffer) -> None:
-            if on_offer is not None:
-                await on_offer(_enrich_offer(offer))
+        # Регион-адъюст для WB/Ozon (они игнорируют region_id) + enrich
+        # с атрибутами/каноническими характеристиками. Оборачиваем
+        # on_offer чтобы SSE сразу нёс адъюстнутые цены без флика.
+        wrapped_on_offer = None
+        if on_offer is not None:
+            if region_id != 213:
+                async def _enrich_and_adjust(offer: ProductOffer, _cb=on_offer) -> None:
+                    await _cb(adjust_offer_for_region(_enrich_offer(offer), region_id))
+                wrapped_on_offer = _enrich_and_adjust
+            else:
+                async def _enriched(offer: ProductOffer, _cb=on_offer) -> None:
+                    await _cb(_enrich_offer(offer))
+                wrapped_on_offer = _enriched
 
         try:
             result = await adapter.search(
                 normalized,
                 limit=limit,
-                on_offer=enriched_on_offer if on_offer is not None else None,
+                on_offer=wrapped_on_offer,
                 region_id=region_id,
             )
         except Exception as exc:  # never propagate — isolate sources
@@ -355,7 +369,7 @@ class SearchOrchestrator:
                 alt_result = await adapter.search(
                     alt,
                     limit=limit,
-                    on_offer=enriched_on_offer if on_offer is not None else None,
+                    on_offer=wrapped_on_offer,
                     region_id=region_id,
                 )
             except Exception as exc:
@@ -365,6 +379,17 @@ class SearchOrchestrator:
                     result = alt_result
 
         result = _enrich_result(result)
+
+        # Regional pricing — применяем к финальному списку, чтобы кэш
+        # и min/avg/median считались с адъюстнутыми ценами.
+        if region_id != 213 and result.offers:
+            result = ScrapeResult(
+                source=result.source,
+                offers=[adjust_offer_for_region(o, region_id) for o in result.offers],
+                error=result.error,
+                cached=result.cached,
+            )
+
         layer = self._cascade.layer_for(adapter.source)
         ok = bool(result.offers) and not result.error
         self._cascade.record_outcome(adapter.source, layer, ok)
