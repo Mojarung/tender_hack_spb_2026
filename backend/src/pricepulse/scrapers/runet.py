@@ -46,6 +46,35 @@ from pricepulse.scrapers.base import OnOffer, ScrapeResult
 
 log = structlog.get_logger(__name__)
 
+# Yandex `lr` region_id → city name in locative case ("купить в <X>").
+# Default 213 (Москва) is intentionally absent: appending "купить в Москве"
+# would NARROW results (Москва is already SERP's default geo); for the
+# default region we just send the bare query.
+# Covers the top-12 regions for which WB also has dest codes — overlap is
+# intentional so the same 12 cities power both adapters.
+_REGION_LOCATIVE: dict[int, str] = {
+    2:   "Санкт-Петербурге",
+    54:  "Екатеринбурге",       # Свердловская область
+    65:  "Новосибирске",
+    35:  "Краснодаре",
+    43:  "Казани",              # Татарстан
+    47:  "Нижнем Новгороде",
+    39:  "Ростове-на-Дону",
+    172: "Уфе",
+    51:  "Самаре",
+    193: "Воронеже",
+    50:  "Перми",
+}
+
+
+def _maybe_geo_query(query: str, region_id: int) -> str:
+    """Append "купить в <city>" for known non-default regions; otherwise
+    return the query unchanged. Yandex SERP then favours regional shops
+    (spb.dns-shop.ru, ekb.mvideo.ru, regional Apple-stores, etc.)."""
+    city = _REGION_LOCATIVE.get(region_id)
+    return f"{query} купить в {city}" if city else query
+
+
 # Marketplaces already represented by other adapters — never count them
 # as the "4th source", per methodology criterion 3 (25/100).
 _EXCLUDED_HOSTS: frozenset[str] = frozenset({
@@ -263,11 +292,15 @@ class RunetScraper:
         if not q:
             return ScrapeResult(source=self.source, offers=[])
 
+        # Region-aware query: for non-default regions append "купить в <city>"
+        # so SERP returns regional shops (ekb.mvideo.ru, spb.dns-shop.ru, …).
+        geo_q = _maybe_geo_query(q, region_id)
+
         with scrape_duration_seconds.labels(source=self.source.value).time():
             # 1) URL discovery — Yandex SERP through the stealth browser
             try:
                 browser = await get_yandex_browser()
-                serp = await browser.serp_search(q)
+                serp = await browser.serp_search(geo_q)
             except Exception as exc:
                 scrape_requests_total.labels(
                     source=self.source.value, outcome="blocked", proxy_tier="browser",
