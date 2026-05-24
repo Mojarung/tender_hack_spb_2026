@@ -633,7 +633,6 @@ function SearchInner() {
               return <h1 className="text-2xl font-semibold tracking-tight">Результаты по «{displayedQuery}»</h1>;
             })()}
             <div className="flex items-center gap-3 mt-1.5 flex-wrap">
-              <NmckExportButton query={q} regionId={region.id} disabled={loading || all.length < 3} />
               <WatchToggleButton query={q} regionId={region.id} disabled={!q.trim()} />
               <label className="text-xs text-[var(--color-ink-4)] flex items-center gap-2">
                 Сортировка:
@@ -723,9 +722,11 @@ function SearchInner() {
           <EmptyState query={q} />
         ) : (
           <>
-            {/* «Если бы это была закупка» — мини-симулятор котировочной
-                сессии по медиане. Видно жюри сразу под заголовком. */}
-            <AuctionSimulator offers={all} />
+            {/* «Если бы это была закупка» — flagship banner for the
+                procurement context. Computes the recommended NMCK on
+                the fly (mirrors the server algorithm) and exposes the
+                Excel-download CTA inside the card itself. */}
+            <AuctionSimulator offers={all} query={liveCorrection?.to ?? q} regionId={region.id} />
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mt-6">
               {offers.map((o, i) => (
@@ -790,116 +791,172 @@ function EmptyState({ query }: { query: string }) {
   );
 }
 
-/** Котировочная сессия simulator — для жюри-госзакупщика это родной
- *  язык: НМЦК / прогноз победной цены / рекомендуемый шаг. Считается на
- *  существующих ценах, бэк не дёргаем. */
-function AuctionSimulator({ offers }: { offers: ProductOffer[] }) {
-  const prices = offers
-    .map((o) => Number(o.price))
-    .filter((n) => Number.isFinite(n) && n > 0)
-    .sort((a, b) => a - b);
-  if (prices.length < 3) return null;    // 44-ФЗ ст.22 — нужно ≥3 КП
-  const mid = Math.floor(prices.length / 2);
-  const median = prices.length % 2 ? prices[mid] : (prices[mid - 1] + prices[mid]) / 2;
-  // Стандартные эвристики портала zakupki.mos.ru:
-  //   НМЦК ≈ median × 1.10 (с учётом запаса на торги)
-  //   ожидаемая победная цена ≈ median × 0.85 (типовое снижение)
-  //   шаг = max(500₽, 0.5% от НМЦК), округлено до 100₽
-  const nmck = Math.round(median * 1.10);
-  const winnerEst = Math.round(median * 0.85);
-  const step = Math.max(500, Math.round((nmck * 0.005) / 100) * 100);
-  const fmt = (n: number) => n.toLocaleString("ru-RU") + " ₽";
-  return (
-    <div className="mt-6 rounded-2xl border border-[var(--color-accent-100)] bg-gradient-to-br from-[var(--color-accent-50)] to-white p-5">
-      <div className="flex items-center gap-2 mb-3">
-        <span className="grid place-items-center w-7 h-7 rounded-full bg-[var(--color-accent)] text-white text-xs font-bold">
-          ₽
-        </span>
-        <h3 className="text-sm font-semibold text-[var(--color-ink-2)]">
-          Если бы это была закупка через портал
-        </h3>
-        <span className="text-[10px] text-[var(--color-ink-4)] uppercase tracking-wider">
-          симулятор котировочной сессии
-        </span>
-      </div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <Stat label="НМЦК (стартовая)" value={fmt(nmck)}
-              hint="median × 1.10 — типовой запас на торги" accent />
-        <Stat label="Прогноз победной" value={fmt(winnerEst)}
-              hint="median × 0.85 — статистика портала" />
-        <Stat label="Рекомендуемый шаг" value={fmt(step)}
-              hint="0.5 % от НМЦК, мин. 500 ₽" />
-        <Stat label="Медиана рынка" value={fmt(Math.round(median))}
-              hint={`по ${prices.length} предложениям`} />
-      </div>
-    </div>
-  );
-}
-
-function Stat({ label, value, hint, accent }: {
-  label: string; value: string; hint?: string; accent?: boolean;
-}) {
-  return (
-    <div>
-      <div className="text-[11px] uppercase tracking-wider text-[var(--color-ink-4)]">{label}</div>
-      <div className={clsx(
-        "text-lg font-semibold tabular-nums",
-        accent ? "text-[var(--color-accent-2)]" : "text-[var(--color-ink)]",
-      )}>
-        {value}
-      </div>
-      {hint && <div className="text-[10px] text-[var(--color-ink-4)] mt-0.5">{hint}</div>}
-    </div>
-  );
-}
-
-/** «Скачать обоснование НМЦК» — single-click 44-ФЗ Приложение №1.
- *  Triggers /api/v1/nmck/export, which re-runs the search through the
- *  orchestrator (hitting the per-region cache) and renders an Excel
- *  workbook with three+ КП, mean/σ/V statistics, and the final НМЦК. */
-function NmckExportButton({
-  query, regionId, disabled,
+/** Главная плашка-витрина для жюри: «если бы это была госзакупка —
+ *  вот рекомендуемая цена и кнопка скачать обоснование». Считается тем
+ *  же алгоритмом, что и Excel-export на бэке (фильтр выбросов + score
+ *  по rating × log(reviews)), чтобы цифра на экране совпадала с цифрой
+ *  в скачанном файле. */
+function AuctionSimulator({
+  offers, query, regionId,
 }: {
+  offers: ProductOffer[];
   query: string;
   regionId: number;
-  disabled: boolean;
 }) {
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  async function onClick() {
-    setBusy(true); setErr(null);
-    try {
-      await api.nmckExport(query, { region_id: regionId, max_per_source: 10 });
-    } catch (e) {
-      setErr(e instanceof Error ? e.message.slice(0, 80) : "не вышло");
-    } finally {
-      setBusy(false);
-    }
+  const valid = offers.filter((o) => {
+    const p = Number(o.price);
+    return Number.isFinite(p) && p > 0;
+  });
+  if (valid.length < 3) return null;
+
+  // Dedup by seller (keep cheapest), filter outliers, score by trust.
+  const bySeller = new Map<string, ProductOffer>();
+  for (const o of valid) {
+    const key = (o.seller || o.source).trim().toLowerCase();
+    const cur = bySeller.get(key);
+    if (!cur || Number(o.price) < Number(cur.price)) bySeller.set(key, o);
   }
+  const pool = [...bySeller.values()];
+  const sortedPrices = pool.map((o) => Number(o.price)).sort((a, b) => a - b);
+  const m = sortedPrices.length;
+  const median = m % 2 ? sortedPrices[(m - 1) / 2]
+                       : (sortedPrices[m / 2 - 1] + sortedPrices[m / 2]) / 2;
+  // Toss obvious counterfeits (cheap-half outliers) + premium bundles (top outliers).
+  let realistic = pool.filter((o) => {
+    const p = Number(o.price);
+    return p >= median * 0.5 && p <= median * 2.0;
+  });
+  if (realistic.length < 3) realistic = pool;    // fallback when filter is too aggressive
+
+  const trust = (o: ProductOffer) => {
+    const r = Number(o.rating) || 4.0;
+    const n = Number(o.reviews_count) || 0;
+    return Math.log10(n + 1) * r;
+  };
+  realistic.sort((a, b) => trust(b) - trust(a)
+    || Math.abs(Number(a.price) - median) - Math.abs(Number(b.price) - median));
+  const top = realistic.slice(0, 5);
+  if (top.length < 3) return null;
+
+  const prices = top.map((o) => Number(o.price));
+  const mean = prices.reduce((s, x) => s + x, 0) / prices.length;
+  const variance = prices.reduce((s, x) => s + (x - mean) ** 2, 0) / (prices.length - 1);
+  const sigma = Math.sqrt(variance);
+  const cv = (sigma / mean) * 100;
+  const cheapest = Math.min(...prices);
+  const homogeneous = cv <= 33.0;
+  const fmt = (n: number) => Math.round(n).toLocaleString("ru-RU") + " ₽";
+
   return (
-    <div className="flex items-center gap-1.5">
-      <button
-        type="button"
-        disabled={disabled || busy}
-        onClick={onClick}
-        title="Сгенерировать обоснование НМЦК по 44-ФЗ (Приложение №1)"
-        className={clsx(
-          "inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full transition-colors",
-          "bg-[var(--color-accent-50)] text-[var(--color-accent-2)] hover:bg-[var(--color-accent-100)]",
-          "disabled:opacity-40 disabled:cursor-not-allowed",
-        )}
-      >
-        <Download className="w-3.5 h-3.5" />
-        {busy ? "Готовим…" : "НМЦК · Excel"}
-      </button>
-      {err && (
-        <span className="text-[11px] text-[var(--color-bad)] max-w-[200px] truncate" title={err}>
-          {err}
-        </span>
-      )}
+    <div className="mt-6 rounded-2xl border border-[var(--color-accent-100)] bg-gradient-to-br from-[var(--color-accent-50)] via-white to-white p-6 md:p-7 overflow-hidden relative">
+      {/* Декоративный кружок-блик в углу */}
+      <div className="absolute -top-20 -right-16 w-64 h-64 rounded-full bg-[var(--color-accent-100)] opacity-25 blur-3xl pointer-events-none" />
+
+      <div className="relative grid md:grid-cols-[1fr_auto] gap-6 items-center">
+        <div>
+          <div className="inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--color-accent-2)] mb-2">
+            <span className="grid place-items-center w-5 h-5 rounded-full bg-[var(--color-accent)] text-white text-[10px]">🏛</span>
+            Если бы это была государственная закупка
+          </div>
+          <div className="text-sm text-[var(--color-ink-3)] mb-3 max-w-xl leading-relaxed">
+            Это сколько рекомендуется заложить в бюджет на покупку «{query}».
+            Считаем по 5 проверенным магазинам — у каждого хороший рейтинг
+            и много отзывов.
+          </div>
+          <div className="flex items-baseline gap-3 flex-wrap">
+            <span className="text-[11px] text-[var(--color-ink-4)] uppercase tracking-wider">Рекомендуемая цена</span>
+          </div>
+          <div className="flex items-baseline gap-2 mt-1">
+            <span className="text-4xl md:text-5xl font-bold tabular-nums text-[var(--color-accent-2)] tracking-tight">
+              {fmt(mean)}
+            </span>
+            <span className="text-sm text-[var(--color-ink-4)]">за 1 шт.</span>
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Pill
+              ok
+              label={`✓ ${top.length} магазина проверено`}
+              hint={`по закону нужно минимум 3`}
+            />
+            <Pill
+              ok={homogeneous}
+              label={homogeneous
+                ? `✓ Цены сопоставимы (разброс ${cv.toFixed(0)}%)`
+                : `⚠ Разные цены (разброс ${cv.toFixed(0)}%)`}
+              hint={homogeneous
+                ? "норма — отличия меньше трети"
+                : "лучше пересмотреть состав магазинов"}
+            />
+            <Pill
+              label={`Самое дешёвое: ${fmt(cheapest)}`}
+              hint="ориентир нижней границы торгов"
+            />
+          </div>
+        </div>
+
+        <div className="flex flex-col items-stretch md:items-end gap-2 shrink-0 md:min-w-[200px]">
+          <BigDownloadButton query={query} regionId={regionId} />
+          <span className="text-[11px] text-[var(--color-ink-4)] text-center md:text-right">
+            Excel с расчётом для закупочной документации
+          </span>
+        </div>
+      </div>
     </div>
   );
 }
+
+
+function Pill({ label, hint, ok }: { label: string; hint?: string; ok?: boolean }) {
+  const cls = ok === undefined
+    ? "bg-white text-[var(--color-ink-2)] border-[var(--color-border)]"
+    : ok
+      ? "bg-[color-mix(in_srgb,var(--color-good)_14%,white)] text-[var(--color-good)] border-[color-mix(in_srgb,var(--color-good)_30%,transparent)]"
+      : "bg-[color-mix(in_srgb,var(--color-warn)_14%,white)] text-[var(--color-warn)] border-[color-mix(in_srgb,var(--color-warn)_30%,transparent)]";
+  return (
+    <span
+      title={hint}
+      className={clsx(
+        "inline-flex items-center text-xs px-3 py-1.5 rounded-full border font-medium",
+        cls,
+      )}
+    >
+      {label}
+    </span>
+  );
+}
+
+
+function BigDownloadButton({ query, regionId }: { query: string; regionId: number }) {
+  const [busy, setBusy] = useState(false);
+  async function onClick() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api.nmckExport(query, { region_id: regionId, max_per_source: 10 });
+      toast.success("Готово! Excel скачан");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message.slice(0, 80) : "не вышло");
+    } finally { setBusy(false); }
+  }
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={busy}
+      className={clsx(
+        "inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-sm",
+        "bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent-2)] transition-colors",
+        "shadow-[0_8px_24px_rgba(99,102,241,0.25)] hover:shadow-[0_12px_28px_rgba(99,102,241,0.35)]",
+        "disabled:opacity-60 disabled:cursor-not-allowed",
+      )}
+    >
+      <Download className="w-4 h-4" />
+      {busy ? "Готовим Excel…" : "Скачать обоснование"}
+    </button>
+  );
+}
+
 
 /** "Следить за ценой" toggle. Looks up the user's watch list on mount;
  *  shows BellOff when there's no matching watch yet, Bell (active) when

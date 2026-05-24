@@ -85,9 +85,29 @@ def compute(offers: list[ProductOffer]) -> NmckStats | None:
 
 
 def _select_kp(offers: list[ProductOffer]) -> list[ProductOffer]:
-    """One КП per seller — keep the cheapest. Falls back to source if
-    seller is missing (Yandex SERP path doesn't always have it). Result
-    is capped at _KP_FORMULA_LIMIT."""
+    """Pick the КП that a procurement officer would actually defend
+    in tender paperwork — not just "cheapest from each seller", because
+    that gives the formula whatever counterfeit listing is currently
+    sitting at the top of WB.
+
+    Strategy:
+      1. Drop offers without a price.
+      2. Dedup by seller, keep the cheapest from each (a seller's own
+         listings rarely diverge meaningfully).
+      3. Compute a rough market median across the dedup'd pool. Drop
+         anything below median × 0.5 (almost certainly a counterfeit
+         or wrong-SKU) or above median × 2 (premium bundle / wrong
+         category match).
+      4. Score the survivors by "trustworthiness":
+            trust = log10(reviews + 1) × rating
+         Offers with no rating get 0.5×rating mid-tier credit so they
+         don't get hard-zeroed (Yandex SERP path often lacks rating).
+      5. Take the top _KP_FORMULA_LIMIT by trust score, but break ties
+         and fill gaps with proximity-to-median so we still end up with
+         realistic prices, not just popular ones.
+      6. Fallback — if filtering leaves <3 КП (a rare query with bad
+         coverage), relax and fall back to the cheapest-per-seller
+         pool so the report still renders."""
     by_seller: dict[str, ProductOffer] = {}
     for o in offers:
         if o.price is None or o.price <= 0:
@@ -96,7 +116,35 @@ def _select_kp(offers: list[ProductOffer]) -> list[ProductOffer]:
         cur = by_seller.get(key)
         if cur is None or o.price < cur.price:
             by_seller[key] = o
-    return sorted(by_seller.values(), key=lambda o: o.price)[:_KP_FORMULA_LIMIT]
+    pool = list(by_seller.values())
+    if len(pool) < 3:
+        return sorted(pool, key=lambda o: o.price)
+
+    prices = sorted(float(o.price) for o in pool)
+    mid = len(prices) // 2
+    market_median = prices[mid] if len(prices) % 2 else (prices[mid - 1] + prices[mid]) / 2
+
+    def in_band(o: ProductOffer) -> bool:
+        p = float(o.price)
+        return market_median * 0.5 <= p <= market_median * 2.0
+
+    realistic = [o for o in pool if in_band(o)]
+    if len(realistic) < 3:
+        # Filter was too aggressive — fall back to the full dedup pool
+        # sorted by closeness to median so the formula still gets
+        # representative prices.
+        realistic = sorted(pool, key=lambda o: abs(float(o.price) - market_median))
+
+    def trust(o: ProductOffer) -> float:
+        reviews = float(o.reviews_count or 0)
+        # log10(reviews+1) keeps it well-behaved at 0; rating defaults to
+        # 4.0 when missing so absent metadata doesn't penalise sellers
+        # that simply didn't expose rating in the scrape.
+        rating = float(o.rating) if o.rating is not None else 4.0
+        return math.log10(reviews + 1.0) * rating
+
+    realistic.sort(key=lambda o: (-trust(o), abs(float(o.price) - market_median)))
+    return realistic[:_KP_FORMULA_LIMIT]
 
 
 def _source_value(o: ProductOffer) -> str:
@@ -166,46 +214,45 @@ def _render_summary_sheet(
 
     # ─── Title ───
     ws.merge_cells("A1:F1")
-    _put(ws, 1, 1, "ОБОСНОВАНИЕ НАЧАЛЬНОЙ (МАКСИМАЛЬНОЙ) ЦЕНЫ КОНТРАКТА",
-         font=Font(bold=True, size=14, color="1F4E79"), align=centred)
-    ws.row_dimensions[1].height = 26
+    _put(ws, 1, 1, "Сколько закладывать на закупку",
+         font=Font(bold=True, size=16, color="1F4E79"), align=centred)
+    ws.row_dimensions[1].height = 28
 
     ws.merge_cells("A2:F2")
-    _put(ws, 2, 1, "Метод сопоставимых рыночных цен (анализ рынка). "
-         "Регламент: ч.6 ст.22 Федерального закона № 44-ФЗ.",
+    _put(ws, 2, 1,
+         "Готовое обоснование цены контракта по 44-ФЗ — можно сразу "
+         "вставлять в закупочную документацию",
          font=_CAPTION_FONT, align=centred)
 
-    # ─── What is this — plain-language intro for non-experts ───
-    ws.merge_cells("A4:F4")
-    _put(ws, 4, 1, "ЧТО ЭТО ЗА ДОКУМЕНТ", font=_LABEL_FONT,
-         align=Alignment(horizontal="left"))
-    ws.merge_cells("A5:F7")
-    _put(ws, 5, 1,
-         "НМЦК — это максимальная цена, по которой заказчик готов заключить "
-         "контракт. По 44-ФЗ она рассчитывается как среднее арифметическое "
-         "не менее чем по трём коммерческим предложениям с открытого рынка.\n"
-         "Ниже — расчёт по 5 ценам, собранным с Wildberries, Ozon и магазинов "
-         "Рунета. Все формулы можно отредактировать в этом же файле — итог "
-         "автоматически пересчитается.",
-         font=Font(size=10), align=Alignment(wrap_text=True, vertical="top"))
-    ws.row_dimensions[5].height = 56
+    # ─── What this document is — short, plain Russian ───
+    ws.merge_cells("A4:F6")
+    _put(ws, 4, 1,
+         "Когда государственное учреждение что-то покупает, оно сначала "
+         "должно посчитать «справедливую» цену по рынку — это и есть НМЦК "
+         "(начальная максимальная цена контракта). Мы взяли цены этого "
+         "товара в нескольких крупных интернет-магазинах и посчитали "
+         "среднюю. Эту цифру можно использовать как стартовую на торгах.",
+         font=Font(size=11), align=Alignment(wrap_text=True, vertical="top"))
+    ws.row_dimensions[4].height = 60
 
     # ─── Big summary card ───
-    summary_row = 9
+    summary_row = 8
     ws.merge_cells(f"A{summary_row}:C{summary_row}")
-    _put(ws, summary_row, 1, "ИТОГОВАЯ НМЦК (за 1 ед.)",
-         font=_LABEL_FONT, fill=_NMCK_BG, align=centred, border=True)
+    _put(ws, summary_row, 1, "Рекомендуемая цена за 1 шт.",
+         font=Font(bold=True, size=11, color="404040"),
+         fill=_NMCK_BG, align=centred, border=True)
     ws.merge_cells(f"D{summary_row}:F{summary_row}")
     _put(ws, summary_row, 4, float(stats.mean), font=_NMCK_FONT,
          fill=_NMCK_BG, align=centred, border=True,
          num_format='#,##0.00 "₽"')
-    ws.row_dimensions[summary_row].height = 38
+    ws.row_dimensions[summary_row].height = 42
 
     if quantity > 1:
         total_row = summary_row + 1
         ws.merge_cells(f"A{total_row}:C{total_row}")
-        _put(ws, total_row, 1, f"НМЦК на партию ({quantity} ед.)",
-             font=_LABEL_FONT, fill=_NMCK_BG, align=centred, border=True)
+        _put(ws, total_row, 1, f"Итого за партию ({quantity} шт.)",
+             font=Font(bold=True, size=11, color="404040"),
+             fill=_NMCK_BG, align=centred, border=True)
         ws.merge_cells(f"D{total_row}:F{total_row}")
         _put(ws, total_row, 4, float(stats.mean) * quantity,
              font=Font(bold=True, size=14, color="1F4E79"),
@@ -217,27 +264,26 @@ def _render_summary_sheet(
     verdict_row = summary_row + (3 if quantity > 1 else 2)
     fill = _VERDICT_OK if stats.homogeneous else _VERDICT_BAD
     verdict_text = (
-        "✓ Выборка ОДНОРОДНА — НМЦК можно использовать в закупочной документации"
+        "✓ Цены в разных магазинах близки друг к другу — расчёту можно доверять"
         if stats.homogeneous
-        else "⚠ Выборка НЕОДНОРОДНА (V > 33%) — рекомендуется добавить ещё КП"
-        " или сменить метод обоснования"
+        else "⚠ Цены сильно разные (отличия больше трети) — лучше перепроверить вручную"
     )
     ws.merge_cells(f"A{verdict_row}:F{verdict_row}")
     _put(ws, verdict_row, 1, verdict_text,
          font=Font(bold=True, size=11), fill=fill, align=centred, border=True)
-    ws.row_dimensions[verdict_row].height = 24
+    ws.row_dimensions[verdict_row].height = 26
 
-    # ─── Quick stats row ───
+    # ─── Quick stats row — plain-language labels ───
     qs_row = verdict_row + 2
     quick = [
-        ("Источников", str(stats.n_offers),
-         "минимум по 44-ФЗ — 3"),
-        ("Средняя цена μ", f"{stats.mean:,.2f} ₽".replace(",", " "),
-         "это и есть НМЦК за единицу"),
-        ("Разброс σ", f"{stats.stdev:,.2f} ₽".replace(",", " "),
-         "стандартное отклонение"),
-        ("Коэф. вариации V", f"{stats.cv_pct:.1f}%",
-         "норма ≤ 33%"),
+        ("Сколько магазинов проверили", str(stats.n_offers),
+         "по закону нужно минимум 3"),
+        ("Средняя цена", f"{stats.mean:,.0f} ₽".replace(",", " "),
+         "её и берём как НМЦК"),
+        ("Самый дешёвый магазин", f"{min(float(o.price) for o in _select_kp(offers)):,.0f} ₽".replace(",", " "),
+         "ориентир «снизу»"),
+        ("Разброс между ценами", f"{stats.cv_pct:.0f}%",
+         "норма — не больше 33%"),
     ]
     # 2×2 grid of stat tiles: each tile = label / value / hint stacked
     # in 3 rows × 3 columns (so two tiles fit across A:F).
@@ -266,36 +312,37 @@ def _render_summary_sheet(
 
     # ─── Меta block ───
     meta_row = qs_row + 9
-    _put(ws, meta_row, 1, "Предмет закупки:", font=_LABEL_FONT)
+    _put(ws, meta_row, 1, "Что покупаем:", font=_LABEL_FONT)
     ws.merge_cells(start_row=meta_row, start_column=2,
                    end_row=meta_row, end_column=6)
     _put(ws, meta_row, 2, query, align=left_wrap)
 
-    _put(ws, meta_row + 1, 1, "Дата сбора цен:", font=_LABEL_FONT)
+    _put(ws, meta_row + 1, 1, "Дата проверки цен:", font=_LABEL_FONT)
     _put(ws, meta_row + 1, 2, today)
-    _put(ws, meta_row + 2, 1, "Источник данных:", font=_LABEL_FONT)
+    _put(ws, meta_row + 2, 1, "Где искали:", font=_LABEL_FONT)
     ws.merge_cells(start_row=meta_row + 2, start_column=2,
                    end_row=meta_row + 2, end_column=6)
     _put(ws, meta_row + 2, 2,
-         "Автоматический агрегатор PricePulse "
-         "(Wildberries, Ozon, магазины Рунета через поиск Яндекса/Google)",
+         "Wildberries, Ozon, интернет-магазины Рунета (DNS, М.Видео, "
+         "Эльдорадо и другие — через поиск Яндекса)",
          align=left_wrap)
-    _put(ws, meta_row + 3, 1, "Всего обработано предложений:", font=_LABEL_FONT)
-    _put(ws, meta_row + 3, 2, f"{total_found} (в формулу взяты "
-         f"{stats.n_offers} самых дешёвых от разных магазинов)")
+    _put(ws, meta_row + 3, 1, "Найдено всего:", font=_LABEL_FONT)
+    _put(ws, meta_row + 3, 2,
+         f"{total_found} предложений · в расчёт взяли {stats.n_offers} "
+         "самых надёжных (по рейтингу и количеству отзывов)")
 
     # ─── КП table — 5 rows used in the formula ───
     table_title_row = meta_row + 5
     ws.merge_cells(start_row=table_title_row, start_column=1,
                    end_row=table_title_row, end_column=6)
     _put(ws, table_title_row, 1,
-         f"КОММЕРЧЕСКИЕ ПРЕДЛОЖЕНИЯ ({stats.n_offers} шт., "
-         "по одному от каждого магазина — самое дешёвое)",
+         f"ЦЕНЫ, ВЗЯТЫЕ ДЛЯ РАСЧЁТА ({stats.n_offers} шт. — "
+         "по одной из каждого магазина с лучшим рейтингом)",
          font=_LABEL_FONT, align=Alignment(horizontal="left"))
 
     hdr_row = table_title_row + 1
-    headers = ["№", "Магазин (поставщик)", "Цена за ед., ₽", "Кол-во",
-               "Сумма, ₽", "Товар"]
+    headers = ["№", "Магазин", "Цена за 1 шт.", "Кол-во",
+               "Итого", "Что именно покупаем"]
     for col, h in enumerate(headers, start=1):
         _put(ws, hdr_row, col, h, font=_HEADER_FONT, fill=_HEADER_FILL,
              border=True, align=centred)
@@ -317,48 +364,54 @@ def _render_summary_sheet(
 
     last_data = first_data + len(chosen) - 1
 
-    # ─── Computed stats with editable formulas ───
+    # ─── How the price was calculated — visible math, no jargon ───
     stats_row = last_data + 2
-    _put(ws, stats_row, 1, "Средняя цена за единицу, μ",
-         font=_LABEL_FONT, align=Alignment(horizontal="left", indent=1))
-    ws.merge_cells(start_row=stats_row, start_column=2,
-                   end_row=stats_row, end_column=4)
-    _put(ws, stats_row, 2, "Это и есть НМЦК по методу анализа рынка",
-         font=_CAPTION_FONT, align=Alignment(horizontal="left", indent=1))
-    _put(ws, stats_row, 5, f"=AVERAGE(C{first_data}:C{last_data})",
-         font=Font(bold=True), border=True, align=right,
-         num_format='#,##0.00 "₽"')
+    ws.merge_cells(start_row=stats_row, start_column=1,
+                   end_row=stats_row, end_column=6)
+    _put(ws, stats_row, 1, "КАК ПОЛУЧИЛАСЬ ЦЕНА",
+         font=_LABEL_FONT, align=Alignment(horizontal="left"))
 
-    _put(ws, stats_row + 1, 1, "Среднеквадратическое отклонение, σ",
-         font=_LABEL_FONT, align=Alignment(horizontal="left", indent=1))
+    _put(ws, stats_row + 1, 1, "Средняя из цен выше",
+         font=Font(bold=True, size=11),
+         align=Alignment(horizontal="left", indent=1))
     ws.merge_cells(start_row=stats_row + 1, start_column=2,
                    end_row=stats_row + 1, end_column=4)
-    _put(ws, stats_row + 1, 2, "Насколько цены отличаются друг от друга",
+    _put(ws, stats_row + 1, 2, "← это и есть рекомендуемая цена",
          font=_CAPTION_FONT, align=Alignment(horizontal="left", indent=1))
-    _put(ws, stats_row + 1, 5, f"=STDEV(C{first_data}:C{last_data})",
-         border=True, align=right, num_format='#,##0.00 "₽"')
+    _put(ws, stats_row + 1, 5, f"=AVERAGE(C{first_data}:C{last_data})",
+         font=Font(bold=True, size=11), border=True, align=right,
+         num_format='#,##0.00 "₽"', fill=_NMCK_BG)
 
-    _put(ws, stats_row + 2, 1, "Коэффициент вариации, V",
+    _put(ws, stats_row + 2, 1, "Типичное отклонение от средней",
          font=_LABEL_FONT, align=Alignment(horizontal="left", indent=1))
     ws.merge_cells(start_row=stats_row + 2, start_column=2,
                    end_row=stats_row + 2, end_column=4)
     _put(ws, stats_row + 2, 2,
-         "Должен быть ≤ 33% — иначе выборка неоднородна",
+         "насколько обычно цена «гуляет» от средней",
          font=_CAPTION_FONT, align=Alignment(horizontal="left", indent=1))
-    _put(ws, stats_row + 2, 5, f"=E{stats_row + 1}/E{stats_row}*100",
-         border=True, align=right, num_format='0.00"%"')
+    _put(ws, stats_row + 2, 5, f"=STDEV(C{first_data}:C{last_data})",
+         border=True, align=right, num_format='#,##0.00 "₽"')
+
+    _put(ws, stats_row + 3, 1, "Разброс между ценами",
+         font=_LABEL_FONT, align=Alignment(horizontal="left", indent=1))
+    ws.merge_cells(start_row=stats_row + 3, start_column=2,
+                   end_row=stats_row + 3, end_column=4)
+    _put(ws, stats_row + 3, 2,
+         "если больше 33% — лучше проверить цены вручную",
+         font=_CAPTION_FONT, align=Alignment(horizontal="left", indent=1))
+    _put(ws, stats_row + 3, 5, f"=E{stats_row + 2}/E{stats_row + 1}*100",
+         border=True, align=right, num_format='0.0"%"')
 
     # ─── Footer ───
-    foot_row = stats_row + 4
+    foot_row = stats_row + 5
     ws.merge_cells(start_row=foot_row, start_column=1,
                    end_row=foot_row + 1, end_column=6)
     _put(ws, foot_row, 1,
-         "Документ сгенерирован системой PricePulse — "
-         "автоматический агрегатор цен для государственных закупок. "
-         f"Сформирован {today}. "
-         "Полный список найденных предложений — на вкладке «Все источники».",
+         f"Документ собран автоматически системой PricePulse · {today}. "
+         "Все цены и ссылки на товары — на вкладке «Все источники». "
+         "Любую цифру можно поменять прямо в этой таблице, итог пересчитается.",
          font=_CAPTION_FONT, align=Alignment(wrap_text=True, vertical="top"))
-    ws.row_dimensions[foot_row].height = 22
+    ws.row_dimensions[foot_row].height = 24
 
     ws.sheet_view.showGridLines = False
 
@@ -368,7 +421,7 @@ def _render_all_sources_sheet(ws, offers: list[ProductOffer]) -> None:
     analyst can use this to sanity-check that the КП on page 1 are
     realistic (e.g. spot a counterfeit listing that dragged the
     average down)."""
-    ws.title = "Все источники"
+    ws.title = "Все цены"
     widths = [4, 18, 28, 50, 16, 12, 14, 36]
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
@@ -379,22 +432,32 @@ def _render_all_sources_sheet(ws, offers: list[ProductOffer]) -> None:
 
     ws.merge_cells("A1:H1")
     _put(ws, 1, 1,
-         "ВСЕ НАЙДЕННЫЕ ПРЕДЛОЖЕНИЯ — для проверки расчёта на главной вкладке",
-         font=Font(bold=True, size=12, color="1F4E79"), align=centred)
-    ws.row_dimensions[1].height = 22
+         "Все цены, которые мы нашли",
+         font=Font(bold=True, size=14, color="1F4E79"),
+         align=Alignment(horizontal="left", vertical="center"))
+    ws.row_dimensions[1].height = 24
 
-    headers = ["№", "Площадка", "Магазин (поставщик)", "Товар",
-               "Цена, ₽", "Рейтинг", "Отзывов", "Ссылка"]
+    ws.merge_cells("A2:H2")
+    _put(ws, 2, 1,
+         "Здесь все предложения, которые удалось найти. На вкладке «НМЦК» "
+         "мы взяли из них 5 самых надёжных — у магазинов с хорошим рейтингом "
+         "и большим числом отзывов. Любую цену можно открыть по ссылке справа.",
+         font=_CAPTION_FONT, align=Alignment(wrap_text=True, vertical="top"))
+    ws.row_dimensions[2].height = 32
+
+    headers = ["№", "Где продают", "Название магазина", "Что продают",
+               "Цена", "Оценка", "Отзывов", "Перейти к товару"]
+    header_row = 4
     for col, h in enumerate(headers, start=1):
-        _put(ws, 3, col, h, font=_HEADER_FONT, fill=_HEADER_FILL,
+        _put(ws, header_row, col, h, font=_HEADER_FONT, fill=_HEADER_FILL,
              border=True, align=centred)
-    ws.row_dimensions[3].height = 26
+    ws.row_dimensions[header_row].height = 26
 
     sortable = [o for o in offers if o.price is not None and o.price > 0]
     sortable.sort(key=lambda o: (_source_label(o), o.price))
 
     for i, o in enumerate(sortable, start=1):
-        r = 3 + i
+        r = header_row + i
         _put(ws, r, 1, i, border=True, align=centred)
         _put(ws, r, 2, _source_label(o), border=True, align=left_wrap)
         _put(ws, r, 3, o.seller or "—", border=True, align=left_wrap)
@@ -419,8 +482,8 @@ def _render_all_sources_sheet(ws, offers: list[ProductOffer]) -> None:
 
     # Auto-filter so the buyer can drill down per marketplace / seller.
     if sortable:
-        ws.auto_filter.ref = f"A3:H{3 + len(sortable)}"
-    ws.freeze_panes = "A4"
+        ws.auto_filter.ref = f"A{header_row}:H{header_row + len(sortable)}"
+    ws.freeze_panes = f"A{header_row + 1}"
     ws.sheet_view.showGridLines = False
 
 
