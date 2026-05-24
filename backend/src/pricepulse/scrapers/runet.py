@@ -29,11 +29,12 @@ import re
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote_plus, urlparse
 
 import orjson
 import structlog
 
+from pricepulse.antibot.google_browser import get_google_browser
 from pricepulse.antibot.yandex_browser import get_yandex_browser
 from pricepulse.domain.enums import SourceKind
 from pricepulse.domain.models import NormalizedQuery, ProductOffer
@@ -266,8 +267,95 @@ async def _fetch_jsonld_offer(
     return None
 
 
+def _google_stub_to_offer(stub: dict[str, Any], query_for_fallback: str) -> ProductOffer | None:
+    """Build a ProductOffer straight from a Google Shopping card.
+
+    Google ships all the fields inline (title / price / seller / rating /
+    image / characteristics) so no per-shop fetch is needed. URL is a
+    Google search deep-link because the real merchant URL hides behind a
+    trusted-click handler (see google_research/03-04 probes)."""
+    title = (stub.get("title") or "").strip()
+    price_raw = stub.get("price")
+    if not title or not price_raw:
+        return None
+    try:
+        price = Decimal(str(price_raw))
+    except (ValueError, ArithmeticError):
+        return None
+    if price < Decimal(100):
+        return None
+    seller = (stub.get("seller") or "").strip() or None
+    rating = stub.get("rating")
+    try:
+        rating_f = float(rating) if rating is not None else None
+    except (TypeError, ValueError):
+        rating_f = None
+    reviews_count = stub.get("reviews_count")
+    try:
+        reviews_int = int(reviews_count) if reviews_count is not None else None
+    except (TypeError, ValueError):
+        reviews_int = None
+    image = stub.get("image")
+    # Keep both http (real gstatic CDN) and data: URIs — model accepts str
+    # so the inline base64 thumbnail renders on the frontend until lazy
+    # load swaps in the gstatic version.
+    image_str = image if isinstance(image, str) and image.startswith(("http", "data:image")) else None
+    chars: dict[str, str] = {}
+    if seller:
+        chars["Магазин"] = seller
+    extra = stub.get("chars") or {}
+    if isinstance(extra, dict):
+        for k, v in extra.items():
+            if isinstance(v, str) and v:
+                chars[str(k)] = v
+    # Google merchant URL is hidden; we link into a Google Shopping search
+    # so the user lands on the same card and clicks through manually.
+    url = (
+        "https://www.google.com/search?tbm=shop&hl=ru&gl=ru&q="
+        + quote_plus(f"{title} {seller or ''} купить".strip())
+    )
+    _ = query_for_fallback   # reserved for future query-aware URL templates
+    try:
+        return ProductOffer(
+            source=SourceKind.RUNET,
+            name=title,
+            price=price,
+            currency="RUB",
+            url=url,
+            image=image_str,
+            seller=seller,
+            characteristics=chars,
+            rating=rating_f,
+            reviews_count=reviews_int,
+            fetched_at=datetime.now(tz=UTC),
+            cached=False,
+        )
+    except Exception as exc:
+        log.warning("runet.google_offer_validation_failed", title=title[:60], error=str(exc))
+        return None
+
+
+def _dedup_key(offer: ProductOffer) -> tuple[str, str]:
+    """Two offers from different sub-engines collapse to one if same shop
+    + same (case-folded) first-50-chars of title."""
+    seller = (offer.seller or "").lower().strip()
+    name = offer.name.lower().strip()[:50]
+    return (seller, name)
+
+
 class RunetScraper:
-    """4th source — Yandex SERP → non-marketplace candidates → JSON-LD."""
+    """4th source — Google Shopping + Yandex SERP, deduped under one banner.
+
+    Two parallel sub-engines:
+      1. Google Shopping (``google_browser``): rich product cards (price,
+         seller, rating, image, badges) inline — single browser pass, no
+         per-shop fetch.
+      2. Yandex SERP (``yandex_browser``): organic results, then JSON-LD
+         enrichment per merchant URL via curl_cffi. Lower hit-rate but
+         covers shops Google misses (re-store, biggeek …).
+
+    Results are merged + deduped by (seller, title_first_50).
+    """
 
     source: SourceKind = SourceKind.RUNET
 
@@ -279,6 +367,72 @@ class RunetScraper:
     ) -> None:
         self._timeout = timeout_s
         self._enrich_concurrency = enrich_concurrency
+
+    async def _yandex_subsearch(
+        self, q: str, geo_q: str, limit: int,
+    ) -> list[ProductOffer]:
+        """Run the legacy Yandex SERP → JSON-LD enrichment path."""
+        try:
+            browser = await get_yandex_browser()
+            serp = await browser.serp_search(geo_q)
+        except Exception as exc:
+            log.warning("runet.yandex_browser_failed", error=str(exc))
+            return []
+        if serp.get("error"):
+            log.warning("runet.yandex_serp_error", error=serp["error"])
+            return []
+        seen_hosts: set[str] = set()
+        stubs: list[dict[str, Any]] = []
+        for r in serp.get("products") or []:
+            url = r.get("url")
+            if not isinstance(url, str) or _is_excluded(url):
+                continue
+            host = urlparse(url).netloc.lower()
+            if host in seen_hosts:
+                continue
+            seen_hosts.add(host)
+            stubs.append(r)
+        if not stubs:
+            return []
+        try:
+            from curl_cffi.requests import AsyncSession
+        except ImportError:    # pragma: no cover
+            return []
+        sem = asyncio.Semaphore(self._enrich_concurrency)
+        async def _bounded(stub: dict[str, Any], session: Any) -> ProductOffer | None:
+            async with sem:
+                return await _fetch_jsonld_offer(session, stub, self._timeout)
+        async with AsyncSession(impersonate="chrome", timeout=self._timeout) as session:
+            results = await asyncio.gather(
+                *(_bounded(s, session) for s in stubs[: limit * 3]),
+                return_exceptions=True,
+            )
+        out: list[ProductOffer] = []
+        for r in results:
+            if isinstance(r, BaseException) or r is None:
+                continue
+            out.append(r)
+        log.info("runet.yandex_subok", returned=len(out))
+        return out
+
+    async def _google_subsearch(self, q: str) -> list[ProductOffer]:
+        """Run the Google Shopping path. Single browser pass, no enrichment."""
+        try:
+            browser = await get_google_browser()
+            serp = await browser.shopping_search(q)
+        except Exception as exc:
+            log.warning("runet.google_browser_failed", error=str(exc))
+            return []
+        if serp.get("error"):
+            log.warning("runet.google_shopping_error", error=serp["error"])
+            return []
+        out: list[ProductOffer] = []
+        for stub in serp.get("products") or []:
+            offer = _google_stub_to_offer(stub, q)
+            if offer is not None:
+                out.append(offer)
+        log.info("runet.google_subok", returned=len(out))
+        return out
 
     async def search(
         self,
@@ -292,84 +446,30 @@ class RunetScraper:
         if not q:
             return ScrapeResult(source=self.source, offers=[])
 
-        # Region-aware query: for non-default regions append "купить в <city>"
-        # so SERP returns regional shops (ekb.mvideo.ru, spb.dns-shop.ru, …).
+        # Region-aware Yandex query: for non-default regions append
+        # "купить в <city>" so SERP returns regional shops.
         geo_q = _maybe_geo_query(q, region_id)
 
         with scrape_duration_seconds.labels(source=self.source.value).time():
-            # 1) URL discovery — Yandex SERP through the stealth browser
-            try:
-                browser = await get_yandex_browser()
-                serp = await browser.serp_search(geo_q)
-            except Exception as exc:
-                scrape_requests_total.labels(
-                    source=self.source.value, outcome="blocked", proxy_tier="browser",
-                ).inc()
-                log.warning("runet.yandex_browser_failed", error=str(exc))
-                return ScrapeResult(
-                    source=self.source, offers=[],
-                    error=f"Yandex SERP unavailable: {exc}",
-                )
-            if serp.get("error"):
-                return ScrapeResult(
-                    source=self.source, offers=[],
-                    error=f"Yandex SERP: {serp['error']}",
-                )
+            # Fan out to both sub-engines in parallel. Each returns offers
+            # or an empty list on any failure — never raises.
+            google_offers, yandex_offers = await asyncio.gather(
+                self._google_subsearch(q),
+                self._yandex_subsearch(q, geo_q, limit),
+            )
 
-            # Filter out marketplaces we cover natively + dedup by host
-            seen_hosts: set[str] = set()
-            stubs: list[dict[str, Any]] = []
-            for r in serp.get("products") or []:
-                url = r.get("url")
-                if not isinstance(url, str):
-                    continue
-                if _is_excluded(url):
-                    continue
-                host = urlparse(url).netloc.lower()
-                if host in seen_hosts:
-                    continue
-                seen_hosts.add(host)
-                stubs.append(r)
-            if not stubs:
-                scrape_requests_total.labels(
-                    source=self.source.value, outcome="ok", proxy_tier="browser",
-                ).inc()
-                log.info("runet.empty", reason="no non-marketplace SERP results")
-                return ScrapeResult(source=self.source, offers=[])
-
-            # 2) Enrichment — fan-out via curl_cffi (Chrome JA3) for JSON-LD.
-            #    Each call may 403/429/no-jsonld — those silently drop.
-            try:
-                from curl_cffi.requests import AsyncSession
-            except ImportError:    # pragma: no cover
-                return ScrapeResult(
-                    source=self.source, offers=[],
-                    error="curl_cffi not installed",
-                )
-
-            sem = asyncio.Semaphore(self._enrich_concurrency)
-
-            async def _bounded(stub: dict[str, Any], session: Any) -> ProductOffer | None:
-                async with sem:
-                    return await _fetch_jsonld_offer(session, stub, self._timeout)
-
-            async with AsyncSession(
-                impersonate="chrome", timeout=self._timeout,
-            ) as session:
-                results = await asyncio.gather(
-                    *(_bounded(s, session) for s in stubs[: limit * 3]),
-                    return_exceptions=True,
-                )
-
+            # Merge with dedup — Google's richer offers win when keys collide
+            # (full image / characteristics / inline rating).
+            seen: set[tuple[str, str]] = set()
             offers: list[ProductOffer] = []
-            for r in results:
-                if isinstance(r, BaseException):
+            for o in (*google_offers, *yandex_offers):
+                key = _dedup_key(o)
+                if key in seen:
                     continue
-                if r is None:
-                    continue
-                offers.append(r)
+                seen.add(key)
+                offers.append(o)
                 if on_offer is not None:
-                    await on_offer(r)
+                    await on_offer(o)
                 if len(offers) >= limit:
                     break
 
@@ -379,7 +479,9 @@ class RunetScraper:
             scrape_offers_returned_total.labels(source=self.source.value).inc(len(offers))
             log.info(
                 "runet.ok",
-                returned=len(offers), urls_tried=len(stubs),
+                returned=len(offers),
+                from_google=len(google_offers),
+                from_yandex=len(yandex_offers),
             )
             return ScrapeResult(source=self.source, offers=offers)
 

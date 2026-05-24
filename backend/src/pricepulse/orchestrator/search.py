@@ -30,7 +30,6 @@ from pricepulse.scrapers.base import ScrapeResult, ScraperProtocol
 
 # TEMP: imports kept (commented in registry below) so reverting is one
 # uncomment, not a re-add. See _registry construction for the toggle.
-from pricepulse.scrapers.google import GoogleScraper
 from pricepulse.scrapers.ozon import OzonScraper
 from pricepulse.scrapers.runet import RunetScraper
 from pricepulse.scrapers.wb import WildberriesScraper
@@ -44,7 +43,6 @@ _CACHE_TTL: dict[SourceKind, int] = {
     SourceKind.OZON: 15 * 60,
     SourceKind.YA_MARKET: 15 * 60,
     SourceKind.RUNET: 15 * 60,
-    SourceKind.GOOGLE: 15 * 60,
 }
 
 _STALE_CACHE_TTL: dict[SourceKind, int] = {
@@ -52,7 +50,6 @@ _STALE_CACHE_TTL: dict[SourceKind, int] = {
     SourceKind.OZON: 60 * 60,
     SourceKind.YA_MARKET: 60 * 60,
     SourceKind.RUNET: 60 * 60,
-    SourceKind.GOOGLE: 60 * 60,
 }
 
 
@@ -83,8 +80,9 @@ class SearchOrchestrator:
         self._registry: dict[SourceKind, ScraperProtocol] = adapters or {
             SourceKind.WB: WildberriesScraper(),
             SourceKind.OZON: OzonScraper(),
+            # RunetScraper fans out internally to Google Shopping +
+            # Yandex SERP and merges the result under one banner.
             SourceKind.RUNET: RunetScraper(),
-            SourceKind.GOOGLE: GoogleScraper(),
         }
         self._cache = cache
         # Anti-bot L0 — token-bucket rate limiter. Defaults to a process-local
@@ -96,9 +94,6 @@ class SearchOrchestrator:
             SourceKind.OZON: settings.ozon_rpm,
             SourceKind.YA_MARKET: settings.yandex_market_rpm,
             SourceKind.RUNET: settings.runet_rpm,
-            # Google Shopping is single browser + heavy navigation; keep
-            # the per-IP rate-limit identical to Runet.
-            SourceKind.GOOGLE: settings.runet_rpm,
         }
         self._inflight: dict[str, asyncio.Task[ScrapeResult]] = {}
         self._inflight_lock = asyncio.Lock()

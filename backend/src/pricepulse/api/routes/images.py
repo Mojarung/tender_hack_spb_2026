@@ -29,6 +29,9 @@ _ALLOWED_HOSTS_SUFFIXES: tuple[str, ...] = (
     "wbbasket.ru", "wb.ru", "wildberries.ru",
     "ozone.ru", "ozon.ru", "ozonusercontent.com", "ozcdn.com",
     "yandex.net", "yastatic.net", "yandex.ru",
+    # Google Shopping thumbnails (encrypted-tbnN.gstatic.com) — Runet
+    # source pulls image URLs from these CDN hosts.
+    "gstatic.com", "googleusercontent.com",
     # Runet shops — best-effort; the scraper extracts arbitrary image URLs
     # from JSON-LD, so we accept https origins generically below as well.
     "re-store.ru", "biggeek.ru", "dns-shop.ru", "mvideo.ru", "citilink.ru",

@@ -96,11 +96,43 @@ EXTRACTOR_JS = r"""
         reviews_count = Math.round(n);
       }
     }
-    const img = c.querySelector('img:not([src^="data:"])');
-    const image = img ? (img.getAttribute('src') || null) : null;
+    // Image: prefer http (real gstatic CDN), fall back to inline base64
+    // (Google ships base64 thumbs immediately + replaces them with the
+    // gstatic versions only after first visible scroll — the data: ones
+    // render fine in <img>, just smaller).
+    let image = null;
+    const imgs = Array.from(c.querySelectorAll('img'));
+    const httpImg = imgs.find(i => {
+      const s = i.getAttribute('src') || '';
+      return s.startsWith('http') && !/yastatic|favicon/i.test(s);
+    });
+    if (httpImg) image = httpImg.getAttribute('src');
+    else {
+      const dataImg = imgs.find(i => (i.getAttribute('src') || '').startsWith('data:image'));
+      if (dataImg) image = dataImg.getAttribute('src');
+    }
+    // Extra metadata pulled from the same card text — feeds the dynamic
+    // facets on the frontend (UI lets the user filter by these).
+    const chars = {};
+    if (/НИЗКАЯ ЦЕНА/i.test(rawTxt)) chars["Метка"] = "Низкая цена";
+    if (/Б\/у/i.test(rawTxt)) chars["Состояние"] = "Б/у";
+    const original = rawTxt.match(/Обычно\s+(\d{1,3}(?:[ \s]\d{3})*)\s*₽/);
+    if (original) chars["Обычная цена"] = original[1].replace(/[\s ]/g, '') + " ₽";
+    const delivery = rawTxt.match(/Возврат в течение[^\n]+/);
+    if (delivery) chars["Доставка"] = delivery[0].slice(0, 60);
+    // Brand — first word of the title if it's a known maker
+    const BRANDS_RE = new RegExp(
+      '\\b(Apple|Samsung|Xiaomi|Huawei|Sony|JBL|Marshall|Bose|LG|Asus|'
+      + 'Lenovo|HP|Dell|Acer|MSI|Logitech|Razer|Beats|Sennheiser|AKG|'
+      + 'Realme|Honor|Nothing|OPPO|Vivo|TCL|Philips|Bosch|Siemens|'
+      + 'Indesit|Электролюкс)\\b', 'i'
+    );
+    const brandMatch = title.match(BRANDS_RE);
+    if (brandMatch) chars["Бренд"] = brandMatch[1];
+
     if (!price) continue;     // ProductOffer.price is required
     if (!seller) continue;    // no seller ⇒ likely an expanded-view dupe
-    out.push({title, price, seller, rating, reviews_count, image});
+    out.push({title, price, seller, rating, reviews_count, image, chars});
     if (out.length >= 12) break;
   }
   return JSON.stringify(out);
@@ -248,6 +280,17 @@ class GoogleBrowserSearch:
                     return {"error": f"nav failed: {exc}"}
 
             await asyncio.sleep(settle_s)
+            # Google lazy-loads the real gstatic thumbnail images — the
+            # initial paint only ships base64 placeholders. Scroll the
+            # viewport down once to trigger the IntersectionObserver
+            # that swaps them in, then wait a beat.
+            try:
+                await self._tab.evaluate("window.scrollTo(0, 1200)", await_promise=False)
+                await asyncio.sleep(1.5)
+                await self._tab.evaluate("window.scrollTo(0, 0)", await_promise=False)
+                await asyncio.sleep(0.5)
+            except Exception as exc:
+                log.debug("google_browser.scroll_warmup_failed", error=str(exc))
             try:
                 raw = await self._tab.evaluate(EXTRACTOR_JS, await_promise=False)
             except Exception as exc:
