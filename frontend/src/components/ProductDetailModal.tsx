@@ -2,8 +2,8 @@
 
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowUpRight, ChevronLeft, ChevronRight, Star, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { ArrowUpRight, ChevronLeft, ChevronRight, Sparkles, Star, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { api, proxyImage } from "@/lib/api";
@@ -94,7 +94,91 @@ function formatReviewDate(raw: string): string {
 interface Props {
   offer: ProductOffer | null;
   onClose: () => void;
+  /** Forwarded to the AI explainer so it can compare against siblings. */
+  query?: string;
+  allOffers?: ProductOffer[];
 }
+
+/** Streaming Gemma-generated breakdown — opens collapsed, expands on
+ *  click, hits /api/v1/explain and types out the answer. Adds the kind
+ *  of "ohh AI" moment that wins live demos. */
+function AIExplainer({
+  offer, query, allOffers,
+}: {
+  offer: ProductOffer;
+  query: string;
+  allOffers: ProductOffer[];
+}) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const closeRef = useRef<{ close: () => void } | null>(null);
+
+  // Auto-cancel on unmount (e.g. modal closed mid-stream).
+  useEffect(() => () => closeRef.current?.close(), []);
+
+  function start() {
+    setOpen(true);
+    if (text || busy) return;    // already done / running
+    setBusy(true); setErr(null); setText("");
+    const tinyOffer = {
+      source: offer.source, name: offer.name, price: offer.price,
+      seller: offer.seller, rating: offer.rating,
+      reviews_count: offer.reviews_count, url: offer.url,
+    };
+    const tinyAll = allOffers.slice(0, 50).map((o) => ({
+      source: o.source, name: o.name, price: o.price,
+      seller: o.seller, rating: o.rating, reviews_count: o.reviews_count,
+    }));
+    closeRef.current = api.explainStream(
+      query, tinyOffer, tinyAll,
+      (chunk) => setText((prev) => prev + chunk),
+      () => setBusy(false),
+      (msg) => { setErr(msg); setBusy(false); },
+    );
+  }
+
+  return (
+    <section className="rounded-xl border border-[var(--color-accent-100)] bg-gradient-to-br from-[var(--color-accent-50)] to-white p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <span className="grid place-items-center w-7 h-7 rounded-full bg-[var(--color-accent)] text-white">
+            <Sparkles className="w-3.5 h-3.5" />
+          </span>
+          <h3 className="text-sm font-semibold text-[var(--color-ink-2)]">
+            AI-объяснение выгодности
+          </h3>
+        </div>
+        {!open && (
+          <button
+            type="button"
+            onClick={start}
+            className="text-xs font-medium px-3 py-1.5 rounded-full bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent-2)] transition-colors"
+          >
+            Объяснить
+          </button>
+        )}
+      </div>
+      {open && (
+        <div className="mt-3 text-sm text-[var(--color-ink-2)] leading-relaxed whitespace-pre-wrap min-h-[60px]">
+          {text || (busy ? (
+            <span className="text-[var(--color-ink-4)] italic">
+              Локальная модель обрабатывает запрос…
+            </span>
+          ) : null)}
+          {busy && text && (
+            <span className="inline-block w-2 h-4 bg-[var(--color-accent)] ml-0.5 align-middle animate-pulse" />
+          )}
+          {err && (
+            <p className="mt-2 text-xs text-[var(--color-bad)]">{err}</p>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
 
 function OfferOpenButton({ offer }: { offer: ProductOffer }) {
   const [busy, setBusy] = useState(false);
@@ -147,7 +231,7 @@ function OfferOpenButton({ offer }: { offer: ProductOffer }) {
   );
 }
 
-export function ProductDetailModal({ offer, onClose }: Props) {
+export function ProductDetailModal({ offer, onClose, query, allOffers }: Props) {
   const [activeImage, setActiveImage] = useState(0);
   const [mounted, setMounted] = useState(false);
   const [reviewSort, setReviewSort] = useState<ReviewSort>("newest");
@@ -334,6 +418,13 @@ export function ProductDetailModal({ offer, onClose }: Props) {
 
               {/* Details */}
               <div className="flex flex-col gap-5 min-w-0">
+                {/* AI explainer — Gemma streams a 3-4-sentence breakdown
+                    of why this offer compares well (or not) to the
+                    sibling offers in the same search. Forwarded
+                    `query` and `allOffers` give it the context. */}
+                {query && (
+                  <AIExplainer offer={offer} query={query} allOffers={allOffers ?? []} />
+                )}
                 {/* Characteristics */}
                 <section>
                   <h3 className="text-sm font-semibold text-[var(--color-ink-2)] mb-2">

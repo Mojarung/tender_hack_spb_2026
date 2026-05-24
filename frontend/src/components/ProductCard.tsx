@@ -22,9 +22,11 @@ interface Props {
   offer: ProductOffer;
   index?: number;
   highlight?: boolean;   // best deal accent
+  query?: string;        // forwarded to the AI explainer
+  allOffers?: ProductOffer[];   // forwarded to the AI explainer for context
 }
 
-export function ProductCard({ offer, index = 0, highlight }: Props) {
+export function ProductCard({ offer, index = 0, highlight, query, allOffers }: Props) {
   const [fav, setFav] = useState(false);
   const [busy, setBusy] = useState(false);
   const [imgFailed, setImgFailed] = useState(false);
@@ -151,6 +153,8 @@ export function ProductCard({ offer, index = 0, highlight }: Props) {
       <ProductDetailModal
         offer={modalOpen ? offer : null}
         onClose={() => setModalOpen(false)}
+        query={query}
+        allOffers={allOffers}
       />
     </>
   );

@@ -713,7 +713,13 @@ function SearchInner() {
           <>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mt-6">
               {offers.map((o, i) => (
-                <ProductCard key={`${o.source}-${o.url}-${i}`} offer={o} index={i} />
+                <ProductCard
+                  key={`${o.source}-${o.url}-${i}`}
+                  offer={o}
+                  index={i}
+                  query={liveCorrection?.to ?? q}
+                  allOffers={all}
+                />
               ))}
             </div>
             {loading && (

@@ -24,6 +24,7 @@ from pricepulse.antibot.yandex_browser import close_yandex_browser
 from pricepulse.api.cache import close_rate_limiter, close_search_cache
 from pricepulse.api.routes import (
     chat,
+    explain,
     favorites,
     health,
     images,
@@ -155,6 +156,7 @@ def create_app() -> FastAPI:
     app.include_router(chat.router, prefix="/api/v1")
     app.include_router(runet.router, prefix="/api/v1")
     app.include_router(nmck.router, prefix="/api/v1")
+    app.include_router(explain.router, prefix="/api/v1")
 
     _instrument(app)
     return app

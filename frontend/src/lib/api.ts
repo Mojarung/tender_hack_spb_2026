@@ -214,6 +214,59 @@ export const api = {
       body: JSON.stringify({ query, title, seller: seller ?? null }),
     }),
 
+  /** Stream an AI-generated "why this is a good deal" explanation. Returns
+   *  a callable that yields fragments; close() aborts the request. Falls
+   *  back to a static summary if Ollama is down. */
+  explainStream: (
+    query: string,
+    offer: { source: string; name: string; price: string; seller?: string | null;
+             rating?: number | null; reviews_count?: number | null; url?: string | null },
+    allOffers: { source: string; name: string; price: string; seller?: string | null;
+                 rating?: number | null; reviews_count?: number | null }[],
+    onChunk: (text: string) => void,
+    onDone?: () => void,
+    onError?: (msg: string) => void,
+  ): { close: () => void } => {
+    const ctrl = new AbortController();
+    (async () => {
+      try {
+        const res = await fetch(`${BASE}/api/v1/explain`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: ctrl.signal,
+          body: JSON.stringify({ query, offer, all_offers: allOffers }),
+        });
+        if (!res.ok || !res.body) {
+          onError?.(`${res.status} ${res.statusText}`);
+          return;
+        }
+        const reader = res.body.getReader();
+        const dec = new TextDecoder("utf-8");
+        let buf = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          // SSE frames: split on double-newline
+          const frames = buf.split("\n\n");
+          buf = frames.pop() ?? "";
+          for (const frame of frames) {
+            if (!frame.startsWith("data: ")) continue;
+            const payload = frame.slice(6);
+            if (payload === "[DONE]") { onDone?.(); return; }
+            if (payload.startsWith("[ERROR]")) { onError?.(payload.slice(7).trim()); return; }
+            onChunk(payload.replace(/\\n/g, "\n"));
+          }
+        }
+        onDone?.();
+      } catch (e) {
+        if (ctrl.signal.aborted) return;
+        onError?.(e instanceof Error ? e.message : String(e));
+      }
+    })();
+    return { close: () => ctrl.abort() };
+  },
+
   /** Run a search and download the result as a 44-ФЗ Приложение №1 Excel.
    *  Backend re-fetches via the orchestrator (uses cache), assembles the
    *  workbook, returns it as a blob. We trigger the browser download here. */
