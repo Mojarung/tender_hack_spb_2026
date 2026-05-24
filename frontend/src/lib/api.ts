@@ -46,6 +46,10 @@ const BASE =
  *  if MinIO is down — so this is always safe to call. */
 export function proxyImage(url: string | null | undefined, source: string): string {
   if (!url) return "";
+  // Inline data: URIs (Google Shopping ships base64 placeholders) — pass
+  // them straight to <img> instead of round-tripping through the proxy.
+  // Backend image-proxy rejects URLs > 2 kB anyway.
+  if (url.startsWith("data:")) return url;
   return `${BASE}/api/v1/image-proxy?source=${encodeURIComponent(source)}&url=${encodeURIComponent(url)}`;
 }
 

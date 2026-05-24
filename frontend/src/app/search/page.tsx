@@ -252,10 +252,6 @@ function SearchInner() {
   const [facetSearch, setFacetSearch] = useState<Record<string, string>>({});
   const [sort, setSort] = useState<SortMode>("price_asc");
   const [finishedSources, setFinishedSources] = useState<Set<Source>>(() => new Set());
-  // Per-facet snapshot of the last (min,max) bounds we auto-pushed into
-  // numericRanges. Lets us detect "user moved the slider" vs "data grew"
-  // so we expand the range only when the user is still on the auto-bounds.
-  const facetBoundsRef = useRef<Map<string, [number, number]>>(new Map());
   // Upstream "Did you mean X?" suggestion flow — kept alongside our filters.
   const [clarification, setClarification] = useState<QueryClarification | null>(null);
   // Inline correction display while streaming — populated from query_normalized
@@ -300,7 +296,6 @@ function SearchInner() {
     setNumericRanges({});
     setFacetSearch({});
     setFinishedSources(new Set());
-    facetBoundsRef.current = new Map();
 
     // `from` present ⇒ we're already showing the canonical query.
     const useNofix = nofix || !!from;
@@ -430,30 +425,24 @@ function SearchInner() {
   // Detect facets from current set. Cheap, runs every render.
   const facets = buildFacets(all);
 
-  // Auto-init / auto-expand numeric ranges. During a streaming search the
-  // bounds grow as new sources arrive (e.g. WB returns prices 49–53k, then
-  // Ozon brings a 46k offer). If we *froze* the range on first sight, the
-  // late offer would silently fall outside the slider and disappear from
-  // the grid — exactly the "товары появляются только после reload" bug.
-  //
-  // Rule: while the user hasn't touched a slider (range still equals the
-  // previous min/max for that facet), keep expanding it as new data lands.
-  // Once they drag, the ref-set protects their selection.
+  // Auto-init numeric ranges. While the stream is live, KEEP IT SIMPLE:
+  // mirror the current facet bounds into numericRanges so a late offer
+  // (e.g. Ozon's 46k after WB's 49k) doesn't fall outside the slider and
+  // disappear from the grid. Once `done` arrives (loading=false), we stop
+  // touching the slider so the user can drag freely.
   for (const f of facets) {
     if (f.kind !== "numeric") continue;
     queueMicrotask(() => {
       setNumericRanges((prev) => {
         const cur = prev[f.key];
-        if (!cur) return { ...prev, [f.key]: [f.min, f.max] };
-        const prevBounds = facetBoundsRef.current.get(f.key);
-        // User dragged the slider iff cur != prevBounds (we recorded them).
-        const userDragged = !!prevBounds &&
-          (cur[0] !== prevBounds[0] || cur[1] !== prevBounds[1]);
-        if (userDragged) return prev;
-        if (cur[0] === f.min && cur[1] === f.max) return prev;
-        return { ...prev, [f.key]: [f.min, f.max] };
+        if (loading || !cur) {
+          // No prev value OR streaming → sync to current bounds.
+          if (cur && cur[0] === f.min && cur[1] === f.max) return prev;
+          return { ...prev, [f.key]: [f.min, f.max] };
+        }
+        // After stream is done, never override — user is in charge.
+        return prev;
       });
-      facetBoundsRef.current.set(f.key, [f.min, f.max]);
     });
   }
 
