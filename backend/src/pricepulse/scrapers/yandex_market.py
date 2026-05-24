@@ -12,6 +12,7 @@ Strategy:
 
 from __future__ import annotations
 
+import asyncio
 import html as html_lib
 import json
 import os
@@ -468,7 +469,10 @@ def _extract_price(value: dict[str, Any]) -> float | None:
                     prices.append(p)
         if prices:
             return min(prices)
-    for key in ("price", "currentPrice", "minPrice", "defaultOfferPrice", "value", "rawValue", "priceValue", "discountPrice"):
+    for key in (
+        "price", "currentPrice", "minPrice", "defaultOfferPrice",
+        "value", "rawValue", "priceValue", "discountPrice",
+    ):
         p = _extract_price_value(value.get(key))
         if p is not None:
             return p
@@ -914,7 +918,7 @@ class YandexMarketScraper:
                 ],
             }
             executable = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE")
-            if executable and os.path.exists(executable):
+            if executable and await asyncio.to_thread(os.path.exists, executable):
                 launch_kwargs["executable_path"] = executable
             browser = await pw.chromium.launch(
                 **launch_kwargs,
@@ -946,8 +950,8 @@ class YandexMarketScraper:
                     payload = await response.json()
                     if isinstance(payload, dict):
                         payloads.append(payload)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.debug("ya_market.browser_response_parse_failed", error=str(exc))
 
             page.on("response", on_response)
             try:

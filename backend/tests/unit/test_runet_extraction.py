@@ -4,6 +4,7 @@ These tests are offline — no real network calls. They verify that each
 extraction stage (JSON-LD, __NEXT_DATA__, digitalData, microdata, HTML)
 correctly produces ProductOffer objects from crafted HTML snippets.
 """
+
 from __future__ import annotations
 
 import json
@@ -15,8 +16,8 @@ from pricepulse.scrapers.runet import (
     _offers_from_digital_data,
     _offers_from_microdata,
     _offers_from_next_data,
-    _tokenize,
     _to_offer,
+    _tokenize,
     _walk_jsonld,
 )
 
@@ -44,7 +45,7 @@ _JSONLD_PRODUCT_HTML = """
 
 
 def test_jsonld_product_extracted() -> None:
-    payloads = [p for p in _walk_jsonld(_JSONLD_PRODUCT_HTML)]
+    payloads = list(_walk_jsonld(_JSONLD_PRODUCT_HTML))
     assert len(payloads) == 1
     offer = _to_offer(
         "https://koleso.ru/product/1/",

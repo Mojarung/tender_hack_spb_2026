@@ -13,7 +13,15 @@ function sessionId(): string {
   if (typeof window === "undefined") return "anon";
   const k = "pp.chat.sid";
   let v = window.localStorage.getItem(k);
-  if (!v) { v = `web-${crypto.randomUUID()}`; window.localStorage.setItem(k, v); }
+  if (!v) {
+    const id = typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : Array.from(crypto.getRandomValues(new Uint8Array(16))).map((b, i) =>
+          [4, 6, 8, 10].includes(i) ? `-${b.toString(16).padStart(2, "0")}` : b.toString(16).padStart(2, "0")
+        ).join("");
+    v = `web-${id}`;
+    window.localStorage.setItem(k, v);
+  }
   return v;
 }
 

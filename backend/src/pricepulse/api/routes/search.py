@@ -16,7 +16,7 @@ async def search(req: SearchRequest) -> SearchResponse:
         cache=await get_search_cache(),
         limiter=await get_rate_limiter(),
     )
-    normalized, groups, top_deals = await orchestrator.run(
+    normalized, groups, top_deals, clarification = await orchestrator.run(
         query=req.query,
         max_per_source=req.max_per_source,
         sources=req.sources,
@@ -28,5 +28,6 @@ async def search(req: SearchRequest) -> SearchResponse:
         query=normalized,
         groups=groups,
         top_deals=top_deals,
+        clarification=clarification,
         took_ms=took_ms,
     )

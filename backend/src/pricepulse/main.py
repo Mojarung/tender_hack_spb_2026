@@ -1,3 +1,15 @@
+import asyncio
+import sys
+
+# Принудительно устанавливаем WindowsProactorEventLoopPolicy для корректной работы nodriver на Windows
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    try:
+        import uvicorn.loops.asyncio
+        uvicorn.loops.asyncio.asyncio_setup = lambda *args, **kwargs: None
+    except ImportError:
+        pass
+
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -6,9 +18,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator, metrics
 
 from pricepulse.antibot.browser_pool import close_browser_pool
+from pricepulse.antibot.wb_browser import close_wb_browser
 from pricepulse.api.cache import close_rate_limiter, close_search_cache
 from pricepulse.api.routes import (
-    admin,
     chat,
     favorites,
     health,
@@ -36,11 +48,45 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    # Pre-warm both stealth browsers SEQUENTIALLY at app boot. Without
+    # this, the first concurrent `asyncio.gather(ozon_search, wb_search)`
+    # races two `uc.start()` calls in the same process — nodriver
+    # internal state gets confused and one launch fails with
+    # "Failed to connect to browser". Pre-warming pays the launch cost
+    # once at startup (~5-6 s combined) and eliminates the race.
+    from pricepulse.antibot.browser_pool import get_browser_pool
+    from pricepulse.antibot.browser_fetch import get_ozon_cookie_warmer
+    from pricepulse.antibot.wb_browser import get_wb_browser
+    import structlog as _structlog
+    _log = _structlog.get_logger(__name__)
+
+    try:
+        pool = await get_browser_pool()
+        async with pool.acquire("warmup"):
+            pass
+    except Exception as exc:
+        _log.warning("ozon_browser_prewarm_failed", error=repr(exc), exc_info=True)
+    try:
+        wb = await get_wb_browser()
+        await wb._ensure_started()    # type: ignore[attr-defined]
+    except Exception as exc:
+        _log.warning("wb_browser_prewarm_failed", error=repr(exc), exc_info=True)
+
+    # Pre-warm Ozon cookies right after browser launch so the first real
+    # search request hits L1 immediately instead of paying 8 s warm-up.
+    try:
+        warmer = await get_ozon_cookie_warmer()
+        await warmer.get_cookies()
+    except Exception as exc:
+        _log.warning("ozon_cookie_prewarm_failed", error=repr(exc), exc_info=True)
+
     yield
     # Tear singletons down cleanly on app exit.
     await close_search_cache()
     await close_rate_limiter()
     await close_browser_pool()
+    await close_wb_browser()
 
 
 def _instrument(app: FastAPI) -> None:
@@ -88,7 +134,6 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(health.router)
-    app.include_router(admin.router)
     _include_auth_routers(app)
     app.include_router(search.router, prefix="/api/v1")
     app.include_router(stream.router, prefix="/api/v1")

@@ -7,6 +7,14 @@ export const SOURCE_LABEL: Record<Source, string> = {
   runet: "Рунет",
 };
 
+export interface ProductReview {
+  author: string | null;
+  score: number | null;
+  text: string;
+  published_at?: string | null;
+  photos?: string[];
+}
+
 export interface ProductOffer {
   source: Source;
   name: string;
@@ -14,11 +22,16 @@ export interface ProductOffer {
   currency: string;
   url: string;
   image: string | null;
+  // Full product gallery (modal carousel). `image` is the cover thumbnail.
+  // Other sources may return [] until they implement enrichment.
+  images: string[];
   characteristics: Record<string, string>;
   attributes?: ProductAttributes | null;
   delivery?: DeliveryInfo | null;
   seller: string | null;
   rating: number | null;
+  reviews: ProductReview[];
+  reviews_count: number | null;
   fetched_at: string;
   cached: boolean;
 }
@@ -83,12 +96,25 @@ export interface RankedOffer {
   unknown_signals?: string[];
 }
 
+export interface ClarificationOption {
+  label: string;
+  text: string;
+  query: string;
+}
+
+export interface QueryClarification {
+  is_ambiguous: boolean;
+  reason: string | null;
+  options: ClarificationOption[];
+}
+
 export interface SearchResponse {
   query: NormalizedQuery;
   groups: SourceGroup[];
   top_deals: RankedOffer[];
   took_ms: number;
   partial: boolean;
+  clarification?: QueryClarification | null;
 }
 
 export interface ImageQueryResponse {

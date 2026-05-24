@@ -61,10 +61,13 @@ async def test_search_api_returns_attributes_and_delivery(
     calls: list[dict[str, Any]] = []
 
     class StubOrchestrator:
+        def __init__(self, **_: Any) -> None:
+            pass
+
         async def run(
             self,
             **kwargs: Any,
-        ) -> tuple[NormalizedQuery, list[SourceGroup], list[RankedOffer]]:
+        ) -> tuple[NormalizedQuery, list[SourceGroup], list[RankedOffer], None]:
             calls.append(kwargs)
             offer = _offer()
             query = NormalizedQuery(
@@ -85,13 +88,13 @@ async def test_search_api_returns_attributes_and_delivery(
                 median_price=offer.price,
                 offers=[offer],
             )
-            return query, [group], [RankedOffer(offer=offer, score=1.23, rank=1)]
+            return query, [group], [RankedOffer(offer=offer, score=1.23, rank=1)], None
 
     monkeypatch.setattr("pricepulse.api.routes.search.SearchOrchestrator", StubOrchestrator)
 
     response = await client.post(
         "/api/v1/search",
-        json={"query": "айфон 15 черный", "max_per_source": 3, "city": "Москва"},
+        json={"query": "айфон 15 черный", "max_per_source": 3, "region_id": 213},
     )
 
     assert response.status_code == 200
@@ -101,7 +104,7 @@ async def test_search_api_returns_attributes_and_delivery(
         "max_per_source": 3,
         "sources": None,
         "nofix": False,
-        "city": "Москва",
+        "region_id": 213,
     }]
     assert body["query"]["attributes"]["model"] == "iphone 15"
     assert body["groups"][0]["median_price"] == "53196"
@@ -114,10 +117,10 @@ async def test_search_api_returns_attributes_and_delivery(
 
 
 @pytest.mark.asyncio
-async def test_search_api_validates_city_length(client: AsyncClient) -> None:
+async def test_search_api_validates_region_id(client: AsyncClient) -> None:
     response = await client.post(
         "/api/v1/search",
-        json={"query": "iphone", "max_per_source": 3, "city": "x" * 121},
+        json={"query": "iphone", "max_per_source": 3, "region_id": 0},
     )
 
     assert response.status_code == 422
@@ -131,6 +134,9 @@ async def test_search_stream_passes_city_and_streams_attributes(
     calls: list[dict[str, Any]] = []
 
     class StubStreamOrchestrator:
+        def __init__(self, **_: Any) -> None:
+            pass
+
         async def stream(self, **kwargs: Any):
             calls.append(kwargs)
             yield "query_normalized", {
@@ -145,11 +151,11 @@ async def test_search_stream_passes_city_and_streams_attributes(
 
     response = await client.get(
         "/api/v1/search/stream",
-        params={"query": "iphone 15 black", "max_per_source": 2, "city": "Москва"},
+        params={"query": "iphone 15 black", "max_per_source": 2, "region_id": 213},
     )
 
     assert response.status_code == 200
-    assert calls == [{"query": "iphone 15 black", "max_per_source": 2, "city": "Москва"}]
+    assert calls == [{"query": "iphone 15 black", "max_per_source": 2, "region_id": 213, "nofix": False}]
     text = response.text
     assert "event: query_normalized" in text
     assert '"model": "iphone 15"' in text

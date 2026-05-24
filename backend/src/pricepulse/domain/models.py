@@ -74,11 +74,21 @@ class ProductOffer(BaseModel):
     currency: str = "RUB"
     url: HttpUrl
     image: HttpUrl | None = None
+    # Full product gallery — main image first. `image` is kept as the
+    # "cover" alias for the card thumbnail; `images` is for the detail
+    # modal carousel. Other scrapers may leave this empty.
+    images: list[HttpUrl] = Field(default_factory=list)
     characteristics: dict[str, str] = Field(default_factory=dict)
     attributes: ProductAttributes | None = None
     delivery: DeliveryInfo | None = None
     seller: str | None = None
     rating: float | None = None
+    # Optional product reviews (currently populated by Ozon — others may
+    # add it later). Each item: {"author": str|None, "score": int|None,
+    # "text": str, "published_at": str|None, "photos": list[str]}.
+    # Trimmed to the top-N most recent.
+    reviews: list[dict[str, str | int | list[str] | None]] = Field(default_factory=list)
+    reviews_count: int | None = None
     fetched_at: datetime
     cached: bool = False
 
@@ -128,6 +138,18 @@ class RankedOffer(BaseModel):
     unknown_signals: list[str] = Field(default_factory=list)
 
 
+class ClarificationOption(BaseModel):
+    label: str = Field(..., description="Short category title with an emoji, e.g. '📱 Смартфоны Apple'")
+    text: str = Field(..., description="Clarification action text, e.g. 'Искать iPhone'")
+    query: str = Field(..., description="The refined query to execute")
+
+
+class QueryClarification(BaseModel):
+    is_ambiguous: bool
+    reason: str | None = None
+    options: list[ClarificationOption] = Field(default_factory=list)
+
+
 class SearchResponse(BaseModel):
     query: NormalizedQuery
     groups: list[SourceGroup]
@@ -137,3 +159,5 @@ class SearchResponse(BaseModel):
     )
     took_ms: int
     partial: bool = False
+    clarification: QueryClarification | None = None
+

@@ -74,12 +74,11 @@ async def test_normalize_query_applies_spellcheck_correction() -> None:
 
 
 async def test_normalize_query_skips_spellcheck_when_disabled() -> None:
-    # Spell-check disabled → brand thesaurus alone does not know
-    # "наушникки", so the text passes through unchanged.
+    # External SAGE disabled; local deterministic typo correction still runs.
     n = await normalize_query(
         "наушникки", spellcheck=SpellCheckClient(url=""),
     )
-    assert n.normalized == "наушникки"
+    assert n.normalized == "наушники"
 
 
 @respx.mock
@@ -90,5 +89,5 @@ async def test_normalize_query_unchanged_when_spellcheck_unreachable() -> None:
     n = await normalize_query(
         "наушникки", spellcheck=SpellCheckClient(url=_TEST_URL),
     )
-    assert n.normalized == "наушникки"
+    assert n.normalized == "наушники"
     assert not any(note.startswith("опечатка: «") for note in n.expansions)

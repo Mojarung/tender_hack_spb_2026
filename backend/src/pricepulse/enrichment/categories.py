@@ -76,4 +76,4 @@ ALL_DOMAIN: tuple[str, ...] = tuple({*TYRES, *APPAREL, *ORG_TECH})
 # terms to outweigh ambiguous near-neighbours.
 DOMAIN_FREQ: int = 50_000_000
 
-__all__ = ["TYRES", "APPAREL", "ORG_TECH", "ALL_DOMAIN", "DOMAIN_FREQ"]
+__all__ = ["ALL_DOMAIN", "APPAREL", "DOMAIN_FREQ", "ORG_TECH", "TYRES"]

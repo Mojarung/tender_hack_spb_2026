@@ -19,7 +19,6 @@ dependencies = [
     # ===== HTTP (cascading L1 of anti-bot stack) =====
     "httpx[http2]>=0.28",
     "curl-cffi>=0.7",           # TLS impersonation (chrome131), HTTP/2+3
-    "tenacity>=9.0",
     # ===== Browser (L2 for Yandex Market XHR interception) =====
     "playwright>=1.49",
     # 4-th source — self-hosted SearXNG + own JSON-LD parser, no third-party API.
@@ -47,25 +46,14 @@ dependencies = [
     "prometheus-client>=0.22",
     "structlog>=24.4",
     "orjson>=3.10",
-]
-
-[project.optional-dependencies]
-# L2 stealth browser — installed only when actively driving a real
-# browser. nodriver is CDP-direct (no WebDriver) and AGPL-3.0; see
-# antibot/browser_pool.py. Install with `uv sync --extra stealth`.
-stealth = [
+    # ===== L2 stealth browser (Ozon path always needs it) =====
+    # nodriver — CDP-direct, no WebDriver. 28/3/0 vs Cloudflare in the
+    # May-2026 anti-detect benchmark (best of any OSS tool). AGPL-3.0;
+    # not a concern for the hackathon project. Used by antibot/browser_pool.py
+    # to warm Ozon's anti-bot cookies (see antibot/browser_fetch.py).
     "nodriver>=0.50",
-]
-# Russian sentiment — adds ~1.5 GB of torch wheels, install on demand.
-nlp = [
-    "symspellpy>=6.7",
-    "transformers>=4.46",
-    "torch>=2.5",
-]
-# Local slider-CAPTCHA solver (OpenCV template matching, on-prem). No external
-# captcha-service deps — methodology p.5 bans third-party APIs.
-captcha = [
-    "opencv-python-headless>=4.10",
+    # ===== AI enrichment / LLM APIs =====
+    "ollama>=0.4.0",
 ]
 
 [dependency-groups]

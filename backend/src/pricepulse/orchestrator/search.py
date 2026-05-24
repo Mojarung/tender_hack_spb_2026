@@ -17,7 +17,14 @@ from pricepulse.antibot.ratelimit import RateLimiter
 from pricepulse.cache.redis_cache import RedisCache
 from pricepulse.config import get_settings
 from pricepulse.domain.enums import SourceKind
-from pricepulse.domain.models import NormalizedQuery, ProductAttributes, ProductOffer, RankedOffer, SourceGroup
+from pricepulse.domain.models import (
+    NormalizedQuery,
+    ProductAttributes,
+    ProductOffer,
+    QueryClarification,
+    RankedOffer,
+    SourceGroup,
+)
 from pricepulse.enrichment.attributes import (
     extract_offer_attributes,
     extract_query_attributes,
@@ -26,9 +33,13 @@ from pricepulse.enrichment.attributes import (
     relevance_breakdown,
 )
 from pricepulse.enrichment.normalize import normalize_query
+from pricepulse.enrichment.query_clarification import check_and_clarify_query
 from pricepulse.scrapers.base import ScrapeResult, ScraperProtocol
+
+# TEMP: imports kept (commented in registry below) so reverting is one
+# uncomment, not a re-add. See _registry construction for the toggle.
 from pricepulse.scrapers.ozon import OzonScraper
-from pricepulse.scrapers.runet import RunetScraper
+from pricepulse.scrapers.runet import RunetScraper  # noqa: F401
 from pricepulse.scrapers.wb import WildberriesScraper
 from pricepulse.scrapers.yandex_market import YandexMarketScraper
 
@@ -42,6 +53,13 @@ _CACHE_TTL: dict[SourceKind, int] = {
 }
 _CENTS = Decimal("0.01")
 _REVIEW_KEYS: tuple[str, ...] = ("feedbacks", "reviews", "rating_count")
+
+_STALE_CACHE_TTL: dict[SourceKind, int] = {
+    SourceKind.WB: 6 * 60 * 60,
+    SourceKind.OZON: 60 * 60,
+    SourceKind.YA_MARKET: 60 * 60,
+    SourceKind.RUNET: 60 * 60,
+}
 
 
 class SearchOrchestrator:
@@ -60,7 +78,6 @@ class SearchOrchestrator:
             SourceKind.WB: WildberriesScraper(),
             SourceKind.OZON: OzonScraper(),
             SourceKind.YA_MARKET: YandexMarketScraper(),
-            SourceKind.RUNET: RunetScraper(),
         }
         self._cache = cache
         self._limiter = limiter or RateLimiter(None)
@@ -70,6 +87,8 @@ class SearchOrchestrator:
             SourceKind.YA_MARKET: settings.yandex_market_rpm,
             SourceKind.RUNET: settings.runet_rpm,
         }
+        self._inflight: dict[str, asyncio.Task[ScrapeResult]] = {}
+        self._inflight_lock = asyncio.Lock()
         self._cascade = cascade or CascadeRouter()
 
     def _pick(self, sources: list[SourceKind] | None) -> list[ScraperProtocol]:
@@ -85,7 +104,8 @@ class SearchOrchestrator:
         *,
         region_id: int = 213,
         nofix: bool = False,
-    ) -> tuple[NormalizedQuery, list[SourceGroup], list[RankedOffer]]:
+    ) -> tuple[NormalizedQuery, list[SourceGroup], list[RankedOffer], QueryClarification | None]:
+        clarification_task = asyncio.create_task(check_and_clarify_query(query))
         normalized = await normalize_query(query, fix=not nofix, cache=self._cache)
         query_attrs = await self._query_attributes(normalized.normalized or normalized.raw)
         normalized = normalized.model_copy(update={"attributes": query_attrs})
@@ -97,7 +117,11 @@ class SearchOrchestrator:
         )
         groups = [_to_group(r) for r in results]
         top_deals = _rank_top_deals(groups, query_attrs=query_attrs, top_k=10)
-        return normalized, groups, top_deals
+        try:
+            clarification = await clarification_task
+        except Exception:
+            clarification = None
+        return normalized, groups, top_deals, clarification
 
     async def stream(
         self,
@@ -109,11 +133,20 @@ class SearchOrchestrator:
         nofix: bool = False,
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
         started = time.perf_counter()
+        clarification_task = asyncio.create_task(check_and_clarify_query(query))
+
         normalized = await normalize_query(query, fix=not nofix, cache=self._cache)
         query_attrs = await self._query_attributes(normalized.normalized or normalized.raw)
         normalized = normalized.model_copy(update={"attributes": query_attrs})
         yield "query_normalized", normalized.model_dump()
 
+        try:
+            clarification = await clarification_task
+            yield "query_clarified", clarification.model_dump(mode="json")
+        except Exception as exc:
+            log.warning("orchestrator.clarification_stream_failed", error=str(exc))
+
+        adapters = self._pick(sources)
         queue: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()
         groups: dict[SourceKind, SourceGroup] = {}
 
@@ -146,7 +179,7 @@ class SearchOrchestrator:
             ))
 
         async def _drain() -> None:
-            await asyncio.gather(*[_drive(a) for a in self._pick(sources)])
+            await asyncio.gather(*[_drive(a) for a in adapters])
             top_deals = _rank_top_deals(list(groups.values()), query_attrs=query_attrs, top_k=10)
             await queue.put(("top_deals", {"top_deals": [d.model_dump(mode="json") for d in top_deals]}))
             await queue.put(None)
@@ -197,6 +230,54 @@ class SearchOrchestrator:
                         await on_offer(offer)
                 return ScrapeResult(source=adapter.source, offers=offers, cached=True)
 
+        async with self._inflight_lock:
+            task = self._inflight.get(cache_key)
+            if task is None:
+                task = asyncio.create_task(self._fetch_source(adapter, normalized, limit, on_offer, region_id))
+                self._inflight[cache_key] = task
+                owner = True
+            else:
+                owner = False
+        try:
+            result = await task
+        finally:
+            if owner:
+                async with self._inflight_lock:
+                    self._inflight.pop(cache_key, None)
+        if not owner:
+            return result
+
+        if result.error and adapter.source == SourceKind.WB and self._cache is not None:
+            stale = await self._get_stale_result(cache_key, adapter.source, on_offer)
+            if stale is not None:
+                log.info(
+                    "orchestrator.stale_cache_served",
+                    source=adapter.source.value,
+                    reason=result.error,
+                )
+                return stale
+
+        # Populate cache on success — wrapped because Redis being down
+        # is never a fatal condition for a successful search.
+        if self._cache is not None and result.offers and not result.error:
+            ttl = _CACHE_TTL.get(adapter.source, 3600)
+            stale_ttl = _STALE_CACHE_TTL.get(adapter.source, ttl)
+            payload = {"offers": [o.model_dump(mode="json") for o in result.offers]}
+            try:
+                await self._cache.set(cache_key, payload, ttl_seconds=ttl)
+                await self._cache.set_stale(cache_key, payload, ttl_seconds=stale_ttl)
+            except Exception as exc:
+                log.debug("orchestrator.cache_set_failed", error=str(exc))
+        return result
+
+    async def _fetch_source(
+        self,
+        adapter: ScraperProtocol,
+        normalized: NormalizedQuery,
+        limit: int,
+        on_offer=None,
+        region_id: int = 213,
+    ) -> ScrapeResult:
         await self._limiter.acquire(adapter.source.value, self._rpm.get(adapter.source, 30))
 
         async def enriched_on_offer(offer: ProductOffer) -> None:
@@ -210,12 +291,28 @@ class SearchOrchestrator:
                 on_offer=enriched_on_offer if on_offer is not None else None,
                 region_id=region_id,
             )
-        except Exception as exc:
-            log.warning("orchestrator.adapter_crash", source=adapter.source.value, error=str(exc))
-            return ScrapeResult(source=adapter.source, offers=[], error=str(exc))
+        except Exception as exc:  # never propagate — isolate sources
+            # `str(exc)` is empty for many exception types (e.g. some
+            # nodriver/asyncio errors). `repr` keeps the type name.
+            log.warning(
+                "orchestrator.adapter_crash",
+                source=adapter.source.value,
+                error=repr(exc),
+                error_type=type(exc).__name__,
+                exc_info=True,
+            )
+            return ScrapeResult(
+                source=adapter.source,
+                offers=[],
+                error=f"{type(exc).__name__}: {exc}".strip(": "),
+            )
 
         if not result.offers and not result.error and normalized.alternates:
-            alt = NormalizedQuery(raw=normalized.raw, normalized=normalized.alternates[0], attributes=normalized.attributes)
+            alt = NormalizedQuery(
+                raw=normalized.raw,
+                normalized=normalized.alternates[0],
+                attributes=normalized.attributes,
+            )
             log.info("orchestrator.synonym_retry", source=adapter.source.value, alt=alt.normalized)
             try:
                 alt_result = await adapter.search(
@@ -235,18 +332,35 @@ class SearchOrchestrator:
         ok = bool(result.offers) and not result.error
         self._cascade.record_outcome(adapter.source, layer, ok)
         if not ok:
-            log.info("orchestrator.source_blocked", source=adapter.source.value, layer=int(layer), error=result.error)
-
-        if self._cache is not None and result.offers and not result.error:
-            try:
-                await self._cache.set(
-                    cache_key,
-                    {"offers": [o.model_dump(mode="json") for o in result.offers]},
-                    ttl_seconds=_CACHE_TTL.get(adapter.source, 3600),
-                )
-            except Exception as exc:
-                log.debug("orchestrator.cache_set_failed", error=str(exc))
+            log.info(
+                "orchestrator.source_blocked",
+                source=adapter.source.value,
+                layer=int(layer),
+                error=result.error,
+            )
         return result
+
+    async def _get_stale_result(
+        self,
+        cache_key: str,
+        source: SourceKind,
+        on_offer=None,
+    ) -> ScrapeResult | None:
+        try:
+            stale = await self._cache.get_stale(cache_key) if self._cache is not None else None
+        except Exception as exc:
+            log.debug("orchestrator.stale_cache_get_failed", error=str(exc))
+            return None
+        if not stale:
+            return None
+        offers = [
+            _enrich_offer(ProductOffer.model_validate(o).model_copy(update={"cached": True}))
+            for o in stale.get("offers", [])
+        ]
+        if on_offer is not None:
+            for offer in offers:
+                await on_offer(offer)
+        return ScrapeResult(source=source, offers=offers, cached=True)
 
 
 def _reviews_count(chars: dict[str, str]) -> int:
@@ -300,10 +414,15 @@ def _rank_top_deals(
     prices = [offer.price for offer in candidates]
     ranked: list[tuple[float, float, float, ProductOffer, dict[str, list[str] | float]]] = []
     for offer in candidates:
+        reviews_count = (
+            offer.reviews_count
+            if offer.reviews_count is not None
+            else _reviews_count(offer.characteristics)
+        )
         deal = best_deal_score(
             price=offer.price,
             rating=offer.rating or 0.0,
-            reviews_count=_reviews_count(offer.characteristics),
+            reviews_count=reviews_count,
             price_population=prices,
             delivery_days=_delivery_days(offer),
         )

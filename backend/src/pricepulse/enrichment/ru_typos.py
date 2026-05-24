@@ -80,7 +80,7 @@ def _get_symspell():
             if count <= 0:
                 continue
             sym.create_dictionary_entry(word, count)
-    except Exception as exc:  # noqa: BLE001 - degrade gracefully if wordfreq fails
+    except Exception as exc:
         log.warning("ru_typos.wordfreq_load_failed: %s", exc)
 
     return sym
@@ -153,4 +153,4 @@ def correct_phrase(text: str) -> tuple[str, list[tuple[str, str]]]:
     return " ".join(out), fixes
 
 
-__all__ = ["correct_token", "correct_phrase"]
+__all__ = ["correct_phrase", "correct_token"]

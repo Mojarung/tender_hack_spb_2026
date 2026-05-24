@@ -19,9 +19,11 @@ COPY src ./src
 
 FROM python:3.13-slim-bookworm AS runtime
 
-# Playwright Chromium needs glibc + a few X libs even in headless mode.
+# Chromium runtime libs — nodriver and Playwright both drive Chromium,
+# which still needs the usual glibc + X stack even when running headless.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium \
+    xvfb \
     libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 \
     libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 \
     libcairo2 libasound2 fonts-liberation curl ca-certificates \
@@ -29,14 +31,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 COPY --from=builder /app /app
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
+
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONPATH="/app/src" \
     PYTHONUNBUFFERED=1 \
-    PLAYWRIGHT_CHROMIUM_EXECUTABLE="/usr/bin/chromium"
+    PLAYWRIGHT_CHROMIUM_EXECUTABLE="/usr/bin/chromium" \
+    DISPLAY=:99
 
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD curl -fsS http://localhost:8000/health || exit 1
 
-CMD ["uvicorn", "pricepulse.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["/app/docker-entrypoint.sh"]

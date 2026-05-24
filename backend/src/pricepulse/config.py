@@ -1,3 +1,4 @@
+import sys
 from functools import lru_cache
 from typing import Literal
 
@@ -13,7 +14,7 @@ class Settings(BaseSettings):
 
     api_host: str = "0.0.0.0"  # noqa: S104
     api_port: int = 8000
-    api_cors_origins: str = "http://localhost:3000"
+    api_cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000,http://85.193.89.114:3000"
 
     # Base host the browser uses to reach our admin landing page links.
     # Override per-environment (e.g. https://admin.pricepulse.team in prod).
@@ -32,11 +33,39 @@ class Settings(BaseSettings):
 
     ozon_browser_pool: int = 2
     yandex_market_browser_pool: int = 2
-    # L2 stealth browser (nodriver). Headless is server-friendly; flip to
-    # false on a desktop/xvfb box for the strongest anti-detect profile.
-    browser_headless: bool = True
+    # L2 stealth browser (nodriver). Headed local Windows runs are useful
+    # for anti-bot warm-up and for seeing the dedicated Ozon/WB windows;
+    # Linux/Docker keeps the server-friendly headless default.
+    browser_headless: bool | None = None
 
-    wb_rpm: int = 60
+    # Persistent Chrome profile for the Ozon stealth browser. Cookies
+    # (abt_data, __Secure-ext_xcid, etc.) survive container restarts so
+    # the first-request anti-bot challenge is paid once per profile,
+    # not once per process. Bind a Docker volume here in prod.
+    ozon_profile_dir: str = "var/profiles/ozon"
+    # How long warmed cookies stay valid in-process before we re-launch
+    # the browser to refresh them. Empirically Ozon rotates these in
+    # 24–72 h; 12 h is a safe default.
+    ozon_cookie_ttl_sec: int = 12 * 3600
+    # Override the Chrome binary path if auto-detect picks the wrong one
+    # (e.g. Yandex Browser on the dev machine).
+    ozon_browser_path: str = ""
+
+    # Persistent Chrome profile for the WB stealth browser (separate
+    # from Ozon's). DOM-scrape of wildberries.ru's SSR catalog page
+    # needs an isolated profile so cookies don't bleed between
+    # marketplaces.
+    wb_profile_dir: str = "var/profiles/wb"
+    wb_browser_path: str = ""
+    # Per-offer concurrent enrichment limit (card.json + feedbacks v2).
+    wb_enrich_concurrency: int = 5
+    # Reviews per offer (each carries photos + video URLs).
+    wb_reviews_per_offer: int = 10
+
+    # WB rpm намеренно снижен по результатам experiments/wb_research:
+    # safe-rate probe ловил 429 уже на 6 RPM с одного IP, поэтому
+    # держим бюджет консервативно низким.
+    wb_rpm: int = 6
     ozon_rpm: int = 20
     yandex_market_rpm: int = 10
     runet_rpm: int = 30
@@ -77,13 +106,6 @@ class Settings(BaseSettings):
 
     image_search_max_bytes: int = 8_000_000
     image_search_cache_ttl_seconds: int = 24 * 3600
-    # Notifications
-    ntfy_url: str = "http://ntfy/pricepulse-alerts"
-    apprise_url: str = "http://apprise:8000/notify/pricepulse"
-
-    # Admin services
-    pgadmin_password: str = "hackathon"
-    glitchtip_secret_key: str = ""
 
     # Demo mode — pre-warm Redis cache for jury-known queries so the live
     # demo answers in <100 ms. Paid feature flags / cost-guard are gone —
@@ -103,6 +125,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _prod_must_override_secrets(self) -> "Settings":
+        if self.browser_headless is None:
+            self.browser_headless = not (sys.platform == "win32" and self.app_env == "local")
         # Hackathon defense runs APP_ENV=local — this only bites in real deployments,
         # where shipping with the dev JWT secret would let anyone mint admin tokens.
         if self.app_env == "prod" and self.auth_jwt_secret.startswith("dev-only"):
