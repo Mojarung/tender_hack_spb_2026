@@ -28,6 +28,7 @@ from pricepulse.api.routes import (
     health,
     images,
     price_history,
+    runet,
     search,
     sentiment,
     stream,
@@ -151,6 +152,7 @@ def create_app() -> FastAPI:
     app.include_router(sentiment.router, prefix="/api/v1")
     app.include_router(favorites.router, prefix="/api/v1")
     app.include_router(chat.router, prefix="/api/v1")
+    app.include_router(runet.router, prefix="/api/v1")
 
     _instrument(app)
     return app

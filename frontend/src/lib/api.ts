@@ -204,4 +204,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ message, session_id }),
     }),
+
+  /** Lazily resolve a Google Shopping card to its real merchant URL.
+   *  Backend opens Google in a stealth browser, trusted-clicks the card,
+   *  captures the redirect — ~5-10 s the first time, instant on cache hit. */
+  runetResolve: (query: string, title: string, seller?: string | null) =>
+    http<{ url: string | null }>("/api/v1/runet/resolve", {
+      method: "POST",
+      body: JSON.stringify({ query, title, seller: seller ?? null }),
+    }),
 };

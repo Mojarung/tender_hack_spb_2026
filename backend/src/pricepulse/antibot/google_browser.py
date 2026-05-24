@@ -307,6 +307,153 @@ class GoogleBrowserSearch:
             )
             return {"products": products, "source": "google-shopping"}
 
+    async def resolve_card_url(
+        self,
+        query: str,
+        title: str,
+        seller: str | None = None,
+        *,
+        settle_s: float = 4.0,
+        click_timeout_s: float = 12.0,
+    ) -> str | None:
+        """Open Google Shopping for ``query``, find the card whose title
+        contains ``title``, fire a trusted CDP mouse-click on it, capture
+        the URL of the new tab once it leaves google.com. Returns the
+        merchant URL or None.
+
+        Used by /api/v1/runet/resolve to lazily upgrade a placeholder
+        ``google.com/search`` deep-link into the real shop URL when the
+        user actually clicks the card.
+        """
+        await self._ensure_started()
+        try:
+            import nodriver as uc
+        except ImportError:
+            return None
+        url = f"{GOOGLE_SHOPPING}{quote_plus(query)}"
+        async with self._lock:
+            try:
+                await self._tab.get(url)
+            except Exception as exc:
+                log.warning("google_browser.resolve_nav_failed", error=str(exc))
+                return None
+            await asyncio.sleep(settle_s)
+
+            # Locate the card by title fragment + (optionally) seller, then
+            # return its center coords so we can CDP-click below.
+            want_title = json.dumps((title or "")[:40])
+            want_seller = json.dumps(seller or "")
+            locate_js = (
+                "(() => {\n"
+                f"  const wantTitle = {want_title};\n"
+                f"  const wantSeller = {want_seller};\n"
+                r"""  const ruble = /\d[\d\s]*\s*(?:₽|руб)/i;
+  const seen = new Set();
+  for (const img of document.querySelectorAll('img')) {
+    let el = img;
+    for (let d = 0; d < 10 && el; d++) {
+      el = el.parentElement;
+      if (!el) break;
+      if (!ruble.test(el.innerText || '')) continue;
+      if ((el.innerText || '').length > 1500) break;
+      if (seen.has(el)) break;
+      seen.add(el);
+      const txt = (el.innerText || '');
+      const okTitle = !wantTitle || txt.toLowerCase().includes(wantTitle.toLowerCase());
+      const okSeller = !wantSeller || txt.toLowerCase().includes(wantSeller.toLowerCase());
+      if (okTitle && okSeller) {
+        el.scrollIntoView({block: 'center'});
+        const r = el.getBoundingClientRect();
+        return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
+      }
+      break;
+    }
+  }
+  return JSON.stringify(null);
+})()"""
+            )
+            try:
+                rect_raw = await self._tab.evaluate(locate_js, await_promise=False)
+            except Exception as exc:
+                log.warning("google_browser.resolve_locate_failed", error=str(exc))
+                return None
+            try:
+                rect = json.loads(rect_raw) if isinstance(rect_raw, str) else None
+            except json.JSONDecodeError:
+                rect = None
+            if not rect or "x" not in rect:
+                log.info("google_browser.resolve_no_match", title=title[:60], seller=seller)
+                return None
+            await asyncio.sleep(0.4)    # let scrollIntoView settle
+
+            # Trusted CDP mouse click — synthetic .click() is silently
+            # ignored by Google's React handler.
+            try:
+                pre_tabs = list(self._browser.tabs)
+                pre_url = await self._tab.evaluate("location.href", await_promise=False)
+                pre_url = pre_url if isinstance(pre_url, str) else str(pre_url)
+                mb = uc.cdp.input_.MouseButton.LEFT
+                await self._tab.send(uc.cdp.input_.dispatch_mouse_event(
+                    type_="mouseMoved", x=rect["x"], y=rect["y"],
+                ))
+                await asyncio.sleep(0.15)
+                await self._tab.send(uc.cdp.input_.dispatch_mouse_event(
+                    type_="mousePressed", x=rect["x"], y=rect["y"], button=mb, click_count=1,
+                ))
+                await asyncio.sleep(0.05)
+                await self._tab.send(uc.cdp.input_.dispatch_mouse_event(
+                    type_="mouseReleased", x=rect["x"], y=rect["y"], button=mb, click_count=1,
+                ))
+            except Exception as exc:
+                log.warning("google_browser.resolve_click_failed", error=str(exc))
+                return None
+
+            # Wait for either a new tab to open OR the current tab to
+            # navigate to a non-google URL. Google sometimes opens in
+            # current tab, sometimes _blank.
+            import asyncio as _aio
+            deadline = _aio.get_event_loop().time() + click_timeout_s
+            captured: str | None = None
+            while _aio.get_event_loop().time() < deadline:
+                await asyncio.sleep(0.5)
+                # 1) New tab?
+                new_tabs = [t for t in self._browser.tabs if t not in pre_tabs]
+                if new_tabs:
+                    nt = new_tabs[0]
+                    try:
+                        nt_url = await nt.evaluate("location.href", await_promise=False)
+                        nt_url = nt_url if isinstance(nt_url, str) else str(nt_url)
+                    except Exception as exc:
+                        log.debug("google_browser.resolve_newtab_eval_failed", error=str(exc))
+                        continue
+                    if nt_url and "google.com" not in nt_url and nt_url != "about:blank":
+                        captured = nt_url
+                        try:
+                            await nt.close()
+                        except Exception as exc:
+                            log.debug("google_browser.resolve_newtab_close_failed", error=str(exc))
+                        break
+                # 2) Same-tab navigation off google?
+                try:
+                    cur = await self._tab.evaluate("location.href", await_promise=False)
+                    cur = cur if isinstance(cur, str) else str(cur)
+                except Exception as exc:
+                    log.debug("google_browser.resolve_tab_eval_failed", error=str(exc))
+                    continue
+                if cur and "google.com" not in cur and cur != pre_url:
+                    captured = cur
+                    # Don't strand the SERP tab on the merchant page.
+                    try:
+                        await self._tab.get(pre_url)
+                    except Exception as exc:
+                        log.debug("google_browser.resolve_tab_restore_failed", error=str(exc))
+                    break
+            log.info(
+                "google_browser.resolve_done",
+                title=title[:60], seller=seller, url=captured,
+            )
+            return captured
+
     async def aclose(self) -> None:
         async with self._init_lock:
             if self._browser is not None:

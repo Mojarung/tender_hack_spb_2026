@@ -6,9 +6,18 @@ import { ArrowUpRight, ChevronLeft, ChevronRight, Star, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 
-import { proxyImage } from "@/lib/api";
+import { api, proxyImage } from "@/lib/api";
 import { formatPrice } from "@/lib/format";
 import { SOURCE_LABEL, type ProductOffer, type ProductReview } from "@/lib/types";
+
+/** Google Shopping cards ship without a stable href — we plant a
+ *  placeholder google.com/search URL in scrapers/runet.py and lift it
+ *  to the real merchant URL on click via /api/v1/runet/resolve. Detect
+ *  the placeholder so we know when to take the slow path. */
+function isGooglePlaceholder(url: string | null | undefined): boolean {
+  if (!url) return false;
+  return /^https?:\/\/www\.google\.com\/search\b/.test(url);
+}
 
 type ReviewSort = "newest" | "oldest" | "rating_desc" | "rating_asc";
 
@@ -85,6 +94,57 @@ function formatReviewDate(raw: string): string {
 interface Props {
   offer: ProductOffer | null;
   onClose: () => void;
+}
+
+function OfferOpenButton({ offer }: { offer: ProductOffer }) {
+  const [busy, setBusy] = useState(false);
+  const needsResolve = offer.source === "runet" && isGooglePlaceholder(offer.url);
+
+  async function openOffer(e: React.MouseEvent) {
+    if (!needsResolve) return;    // <a href> handles it
+    e.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    // Open a blank tab synchronously so the browser doesn't treat the
+    // later window.open as a popup (most browsers block tabs opened
+    // after an `await`). We'll point it at the resolved URL once we
+    // have it; on failure, fall back to the original Google URL.
+    const pending = window.open("about:blank", "_blank");
+    try {
+      const res = await api.runetResolve(offer.name, offer.name, offer.seller);
+      const target = res.url || offer.url;
+      if (pending) {
+        pending.location.href = target;
+      } else {
+        // Pop-up blocker ate our placeholder — best effort.
+        window.location.href = target;
+      }
+    } catch {
+      if (pending) pending.location.href = offer.url;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <a
+      href={offer.url}
+      onClick={openOffer}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={clsx(
+        "btn btn-primary inline-flex items-center gap-1.5",
+        busy && "opacity-70 cursor-wait",
+      )}
+    >
+      {busy
+        ? "Ищем магазин…"
+        : needsResolve
+          ? "Открыть в магазине"
+          : `Открыть на ${SOURCE_LABEL[offer.source]}`}
+      <ArrowUpRight className="w-4 h-4" />
+    </a>
+  );
 }
 
 export function ProductDetailModal({ offer, onClose }: Props) {
@@ -389,15 +449,11 @@ export function ProductDetailModal({ offer, onClose }: Props) {
               <div className="text-2xl font-semibold tabular-nums">
                 {formatPrice(offer.price, offer.currency)}
               </div>
-              <a
-                href={offer.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="btn btn-primary inline-flex items-center gap-1.5"
-              >
-                Открыть на {SOURCE_LABEL[offer.source]}
-                <ArrowUpRight className="w-4 h-4" />
-              </a>
+              <OfferOpenButton offer={offer} />
+              {/* OfferOpenButton: for Google-Shopping cards offer.url is a
+                  placeholder Google search; we lazily resolve the real
+                  merchant URL via /api/v1/runet/resolve. Other sources
+                  open immediately. */}
             </div>
           </motion.div>
         </motion.div>
