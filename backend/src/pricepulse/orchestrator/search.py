@@ -436,7 +436,10 @@ def _attach_relevance(offer: ProductOffer, query: str) -> ProductOffer:
     pre-scored it before the final list was assembled)."""
     if offer.relevance is not None:
         return offer
-    score = relevance_score(query, offer.name, offer.characteristics or {})
+    score = relevance_score(
+        query, offer.name, offer.characteristics or {},
+        rating=offer.rating, reviews_count=offer.reviews_count,
+    )
     return offer.model_copy(update={"relevance": score})
 
 
