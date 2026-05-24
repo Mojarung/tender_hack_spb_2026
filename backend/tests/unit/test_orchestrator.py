@@ -5,10 +5,12 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 
+import httpx
 import pytest
 
 from pricepulse.domain.enums import SourceKind
 from pricepulse.domain.models import NormalizedQuery, ProductOffer
+from pricepulse.enrichment.reranker import RerankResult
 from pricepulse.orchestrator.search import SearchOrchestrator
 from pricepulse.scrapers.base import OnOffer, ScrapeResult
 
@@ -61,7 +63,28 @@ class _Cache:
         self.set_stale_calls.append((key, value, ttl_seconds))
 
 
-def _offer(source: SourceKind, name: str, price: int) -> ProductOffer:
+class _FakeReranker:
+    def __init__(self, scores: list[float]) -> None:
+        self.scores = scores
+        self.calls: list[tuple[str, list[str], int | None]] = []
+
+    async def rerank(self, query: str, documents: list[str], *, top_n: int | None = None) -> list[RerankResult]:
+        self.calls.append((query, documents, top_n))
+        return [RerankResult(index=i, score=score) for i, score in enumerate(self.scores[: len(documents)])]
+
+
+class _FailingReranker:
+    async def rerank(self, query: str, documents: list[str], *, top_n: int | None = None) -> list[RerankResult]:
+        raise httpx.ConnectError("reranker unavailable")
+
+
+def _offer(
+    source: SourceKind,
+    name: str,
+    price: int,
+    *,
+    characteristics: dict[str, str] | None = None,
+) -> ProductOffer:
     return ProductOffer(
         source=source,
         name=name,
@@ -69,7 +92,7 @@ def _offer(source: SourceKind, name: str, price: int) -> ProductOffer:
         currency="RUB",
         url=f"https://example.com/{source.value}/{name.replace(' ', '-')}",
         image=None,
-        characteristics={},
+        characteristics=characteristics or {},
         seller=None,
         rating=None,
         fetched_at=datetime.now(tz=UTC),
@@ -162,6 +185,77 @@ async def test_top_deals_prefer_matching_attributes_when_price_equal() -> None:
     _, _, top, _ = await orch.run("iphone 15 black", max_per_source=10)
 
     assert top[0].offer.name == "Apple iPhone 15 Black"
+
+
+@pytest.mark.asyncio
+async def test_top_deals_use_generic_relevance_for_unknown_categories() -> None:
+    adapters = {
+        SourceKind.WB: _Stub(SourceKind.WB, offers=[
+            _offer(
+                SourceKind.WB,
+                "Артикул T-100",
+                50000,
+                characteristics={
+                    "Тип товара": "термос",
+                    "Объем": "1 л",
+                    "Материал": "сталь",
+                },
+            ),
+            _offer(SourceKind.WB, "Кружка керамическая 300 мл", 50000),
+        ]),
+        SourceKind.OZON: _Stub(SourceKind.OZON, offers=[]),
+        SourceKind.YA_MARKET: _Stub(SourceKind.YA_MARKET, offers=[]),
+        SourceKind.RUNET: _Stub(SourceKind.RUNET, offers=[]),
+    }
+    orch = SearchOrchestrator(adapters=adapters)
+
+    _, _, top, _ = await orch.run("термос 1 л сталь", max_per_source=10)
+
+    assert top[0].offer.name == "Артикул T-100"
+    assert top[0].relevance_score > top[1].relevance_score
+    assert "text:термос" in top[0].match_signals
+    assert "number:1л" in top[0].match_signals
+
+
+@pytest.mark.asyncio
+async def test_top_deals_can_be_semantically_reranked() -> None:
+    reranker = _FakeReranker([0.1, 0.99])
+    adapters = {
+        SourceKind.WB: _Stub(SourceKind.WB, offers=[
+            _offer(SourceKind.WB, "Первый кандидат", 50000),
+            _offer(SourceKind.WB, "Семантически лучший кандидат", 50000),
+        ]),
+        SourceKind.OZON: _Stub(SourceKind.OZON, offers=[]),
+        SourceKind.YA_MARKET: _Stub(SourceKind.YA_MARKET, offers=[]),
+        SourceKind.RUNET: _Stub(SourceKind.RUNET, offers=[]),
+    }
+    orch = SearchOrchestrator(adapters=adapters, reranker=reranker)
+
+    _, _, top, _ = await orch.run("неизвестный товар", max_per_source=10)
+
+    assert top[0].offer.name == "Семантически лучший кандидат"
+    assert top[0].rerank_score == 0.99
+    assert "reranker" in top[0].match_signals
+    assert reranker.calls
+
+
+@pytest.mark.asyncio
+async def test_top_deals_keep_base_ranking_when_reranker_fails() -> None:
+    adapters = {
+        SourceKind.WB: _Stub(SourceKind.WB, offers=[
+            _offer(SourceKind.WB, "Apple iPhone 15 Black", 50000),
+            _offer(SourceKind.WB, "Apple iPhone 14 Black", 50000),
+        ]),
+        SourceKind.OZON: _Stub(SourceKind.OZON, offers=[]),
+        SourceKind.YA_MARKET: _Stub(SourceKind.YA_MARKET, offers=[]),
+        SourceKind.RUNET: _Stub(SourceKind.RUNET, offers=[]),
+    }
+    orch = SearchOrchestrator(adapters=adapters, reranker=_FailingReranker())
+
+    _, _, top, _ = await orch.run("iphone 15 black", max_per_source=10)
+
+    assert top[0].offer.name == "Apple iPhone 15 Black"
+    assert top[0].rerank_score is None
 
 
 @pytest.mark.asyncio

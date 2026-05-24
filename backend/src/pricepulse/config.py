@@ -104,6 +104,15 @@ class Settings(BaseSettings):
     ollama_vision_model: str = "gemma4:e4b"
     ollama_text_model: str = "qwen2.5:0.5b"
 
+    # Optional semantic post-ranker. Deterministic attribute scoring remains
+    # the primary ranker; reranker only reorders the top candidates.
+    reranker_enabled: bool = False
+    reranker_url: str = "https://projects-shirt-pre-guided.trycloudflare.com"
+    reranker_model: str = "BAAI/bge-reranker-v2-m3"
+    reranker_top_n: int = 20
+    reranker_timeout_s: float = 8.0
+    reranker_weight: float = 0.25
+
     image_search_max_bytes: int = 8_000_000
     image_search_cache_ttl_seconds: int = 24 * 3600
 

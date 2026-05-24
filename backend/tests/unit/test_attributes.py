@@ -46,6 +46,25 @@ def test_extracts_office_equipment_attributes() -> None:
     assert attrs.wifi is True
 
 
+def test_extracts_office_supply_stapler_attributes() -> None:
+    attrs = extract_query_attributes("степлер №24/6 до 30 листов")
+
+    assert attrs.category == "office_supply"
+    assert attrs.device_type == "stapler"
+    assert attrs.staple_size == "24/6"
+    assert attrs.sheet_capacity == 30
+
+
+def test_office_supply_ranking_prefers_requested_stapler() -> None:
+    query = extract_query_attributes("степлер 24/6")
+    stapler = extract_query_attributes("Степлер металлический №24/6 до 30 листов")
+    staples = extract_query_attributes("Скобы для степлера №24/6")
+    paper = extract_query_attributes("Бумага офисная A4 80 г/м2 500 листов")
+
+    assert attribute_match_score(query, stapler) > attribute_match_score(query, staples)
+    assert attribute_match_score(query, paper) == 0.0
+
+
 def test_extracts_samsung_and_xiaomi_phone_attributes() -> None:
     samsung = extract_query_attributes("самсунг s24 ultra 256 серый")
     xiaomi = extract_query_attributes("xiaomi redmi note 13 8/256 синий")
@@ -93,6 +112,43 @@ def test_extracts_laptop_audio_and_vacuum_attributes() -> None:
     assert airpods.model == "airpods pro 2"
     assert vacuum.category == "robot_vacuum"
     assert vacuum.brand == "xiaomi"
+
+
+def test_extracts_apparel_category_specific_attributes() -> None:
+    attrs = extract_query_attributes("женская зимняя куртка размер M черная полиэстер 170 см")
+
+    assert attrs.category == "apparel"
+    assert attrs.apparel_type == "jacket"
+    assert attrs.gender == "women"
+    assert attrs.size == "M"
+    assert attrs.color == "black"
+    assert attrs.material == "polyester"
+    assert attrs.season == "winter"
+    assert attrs.height_cm == 170
+
+
+def test_extracts_other_office_and_it_attributes() -> None:
+    monitor = extract_query_attributes("монитор 27 дюймов 144hz ips 1920x1080")
+    projector = extract_query_attributes("проектор epson full hd 3000 лм")
+    shredder = extract_query_attributes("шредер p-4 до 10 листов 20 л")
+    laminator = extract_query_attributes("ламинатор A4 125 мкм")
+
+    assert monitor.category == "monitor"
+    assert monitor.screen_size_inch == 27
+    assert monitor.refresh_rate_hz == 144
+    assert monitor.matrix_type == "IPS"
+    assert monitor.resolution == "1920x1080"
+    assert projector.category == "projector"
+    assert projector.resolution == "1920x1080"
+    assert projector.brightness_lm == 3000
+    assert shredder.category == "office_equipment"
+    assert shredder.device_type == "shredder"
+    assert shredder.security_level == "P-4"
+    assert shredder.sheet_capacity == 10
+    assert shredder.bin_volume_l == 20
+    assert laminator.device_type == "laminator"
+    assert laminator.paper_format == "A4"
+    assert laminator.laminating_thickness_microns == 125
 
 
 def test_extracts_broad_categories_without_overfitting_specs() -> None:
