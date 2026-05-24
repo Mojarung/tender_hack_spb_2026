@@ -35,6 +35,11 @@ from pricepulse.enrichment.attributes import (
     merge_attributes,
     relevance_breakdown,
 )
+from pricepulse.enrichment.llm_characteristics import (
+    apply_llm_characteristics,
+    llm_explain_offer,
+    llm_infer_characteristics,
+)
 from pricepulse.enrichment.normalization import canonicalize_characteristics
 from pricepulse.enrichment.normalize import normalize_query
 from pricepulse.enrichment.query_clarification import check_and_clarify_query
@@ -147,6 +152,7 @@ class SearchOrchestrator:
             reranker_top_n=self._reranker_top_n,
             reranker_weight=self._reranker_weight,
             top_k=10,
+            with_llm_explain=True,
         )
         try:
             clarification = await clarification_task
@@ -209,7 +215,7 @@ class SearchOrchestrator:
                 },
             ))
 
-        async def _emit_top_deals(*, with_reranker: bool) -> None:
+        async def _emit_top_deals(*, with_reranker: bool, with_llm: bool = False) -> None:
             all_offer_count = sum(g.count for g in groups.values())
             if all_offer_count == 0:
                 return
@@ -220,7 +226,8 @@ class SearchOrchestrator:
                 reranker=self._reranker if with_reranker else None,
                 reranker_top_n=self._reranker_top_n,
                 reranker_weight=self._reranker_weight,
-                top_k=max(10, all_offer_count),  # ранжируем все офферы — фронт сортирует по relevance
+                top_k=max(10, all_offer_count),
+                with_llm_explain=with_llm,
             )
             await queue.put(("top_deals", {"top_deals": [d.model_dump(mode="json") for d in top_deals]}))
 
@@ -232,8 +239,8 @@ class SearchOrchestrator:
             pending = [asyncio.create_task(_drive(a)) for a in adapters]
             for task in asyncio.as_completed(pending):
                 await task
-                await _emit_top_deals(with_reranker=False)
-            await _emit_top_deals(with_reranker=True)
+                await _emit_top_deals(with_reranker=False, with_llm=False)
+            await _emit_top_deals(with_reranker=True, with_llm=True)
             await queue.put(None)
 
         drainer = asyncio.create_task(_drain())
@@ -254,7 +261,12 @@ class SearchOrchestrator:
         yield "done", {"took_ms": int((time.perf_counter() - started) * 1000)}
 
     async def _query_attributes(self, text: str) -> ProductAttributes:
-        return extract_query_attributes(text)
+        attrs = extract_query_attributes(text)
+        if attrs.confidence < 0.4:
+            llm_data = await llm_infer_characteristics(text)
+            if llm_data:
+                attrs = apply_llm_characteristics(attrs, llm_data)
+        return attrs
 
     async def _safe_call(
         self,
@@ -477,6 +489,7 @@ async def _rank_top_deals(
     reranker_top_n: int = 20,
     reranker_weight: float = 0.25,
     top_k: int = 10,
+    with_llm_explain: bool = False,
 ) -> list[RankedOffer]:
     all_offers = [offer for group in groups for offer in group.offers]
     if not all_offers:
@@ -531,6 +544,9 @@ async def _rank_top_deals(
         )
         for index, (composite, deal, relevance, offer, breakdown) in enumerate(ranked[:top_k])
     ]
+    if with_llm_explain and query_text.strip() and top:
+        top = await _apply_llm_explanations(top, query_text=query_text, top_n=5)
+
     if reranker is None or not query_text.strip() or not top:
         return top
     return await _apply_reranker(
@@ -540,6 +556,44 @@ async def _rank_top_deals(
         top_n=reranker_top_n,
         weight=reranker_weight,
     )
+
+
+async def _apply_llm_explanations(
+    ranked: list[RankedOffer],
+    *,
+    query_text: str,
+    top_n: int = 5,
+) -> list[RankedOffer]:
+    """Add LLM-generated mismatch explanations to top offers that have mismatches.
+
+    Runs explain calls in parallel; falls back silently on any error.
+    """
+    candidates = ranked[:top_n]
+    to_explain = [(i, item) for i, item in enumerate(candidates) if item.mismatch_signals]
+    if not to_explain:
+        return ranked
+
+    async def _explain_one(index: int, item: RankedOffer) -> tuple[int, str | None]:
+        explanation = await llm_explain_offer(
+            query=query_text,
+            offer_name=item.offer.name,
+            characteristics=item.offer.characteristics,
+            mismatches=[_signal_label(s) for s in item.mismatch_signals],
+            unknowns=[_signal_label(s) for s in item.unknown_signals],
+        )
+        return index, explanation
+
+    results = await asyncio.gather(*[_explain_one(i, item) for i, item in to_explain])
+
+    updated = list(ranked)
+    for index, explanation in results:
+        if not explanation:
+            continue
+        item = updated[index]
+        reasons = [r for r in item.selection_reasons if not r.startswith("Расхождение:")]
+        reasons.append(explanation)
+        updated[index] = item.model_copy(update={"selection_reasons": reasons[:4]})
+    return updated
 
 
 async def _apply_reranker(
@@ -554,7 +608,7 @@ async def _apply_reranker(
     documents = [_rerank_document(item.offer) for item in candidates]
     try:
         results = await reranker.rerank(query_text, documents, top_n=len(documents))
-    except Exception as exc:  # noqa: BLE001 - reranker is optional; search must continue.
+    except Exception as exc:
         log.warning("reranker.failed", error=str(exc))
         return ranked
     if not results:
@@ -609,7 +663,7 @@ def _rerank_document(offer: ProductOffer) -> str:
 
 
 def _percent(score: float) -> int:
-    return max(0, min(100, int(round(score * 100))))
+    return max(0, min(100, round(score * 100)))
 
 
 _SIGNAL_LABELS: dict[str, str] = {

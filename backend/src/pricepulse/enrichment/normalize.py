@@ -32,6 +32,7 @@ import structlog
 
 from pricepulse.cache.redis_cache import RedisCache
 from pricepulse.domain.models import NormalizedQuery
+from pricepulse.enrichment.llm_query import llm_fix_query, llm_synonyms
 from pricepulse.enrichment.spellcheck_client import SpellCheckClient
 from pricepulse.enrichment.synonym_thesaurus import synonym_alternates
 from pricepulse.enrichment.thesaurus import translate
@@ -97,12 +98,19 @@ async def normalize_query(
         notes.append(f"опечатка: {orig} → {repl}")
 
     # 2) SpellCheck — SAGE FRED-T5 distilled, general RU spelling.
-    #    No-op when SPELLCHECK_URL is empty or the service is unreachable.
+    #    Fallback to Gemma (Ollama Cloud) when SAGE is unavailable.
     sc = spellcheck if spellcheck is not None else SpellCheckClient()
     if sc.enabled:
         fixed = await sc.fix(text)
         if fixed and fixed != text:
             notes.append(f"опечатка: «{text}» → «{fixed}»")
+            text = fixed
+    else:
+        # LLM query optimizer: transliteration, colloquial→product terms, brand normalization.
+        # Runs unconditionally when SAGE is off — Gemma is fast enough on Cloud.
+        fixed, llm_notes = await llm_fix_query(text)
+        if fixed != text:
+            notes.extend(llm_notes)
             text = fixed
 
     # 3) RU → EN canonical brand form ("айфон 15" → "iphone 15").
@@ -111,8 +119,10 @@ async def normalize_query(
         notes.append(f"перевод: «{text}» → «{translated}»")
     text = translated
 
-    # 4) Synonym alternates.
+    # 4) Synonym alternates — curated thesaurus first, LLM fallback when empty.
     alternates, syn_notes = synonym_alternates(text)
+    if not alternates:
+        alternates = await llm_synonyms(text)
 
     result = NormalizedQuery(
         raw=raw,

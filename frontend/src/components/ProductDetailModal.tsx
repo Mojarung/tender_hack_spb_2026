@@ -8,7 +8,7 @@ import { createPortal } from "react-dom";
 
 import { api, proxyImage } from "@/lib/api";
 import { formatPrice } from "@/lib/format";
-import { SOURCE_LABEL, type ProductOffer, type ProductReview } from "@/lib/types";
+import { SOURCE_LABEL, type ProductOffer, type ProductReview, type RankedOffer } from "@/lib/types";
 
 /** Google Shopping cards ship without a stable href — we plant a
  *  placeholder google.com/search URL in scrapers/runet.py and lift it
@@ -94,6 +94,7 @@ function formatReviewDate(raw: string): string {
 interface Props {
   offer: ProductOffer | null;
   onClose: () => void;
+  ranked?: RankedOffer;
 }
 
 function OfferOpenButton({ offer }: { offer: ProductOffer }) {
@@ -147,7 +148,7 @@ function OfferOpenButton({ offer }: { offer: ProductOffer }) {
   );
 }
 
-export function ProductDetailModal({ offer, onClose }: Props) {
+export function ProductDetailModal({ offer, onClose, ranked }: Props) {
   const [activeImage, setActiveImage] = useState(0);
   const [mounted, setMounted] = useState(false);
   const [reviewSort, setReviewSort] = useState<ReviewSort>("newest");
@@ -334,6 +335,37 @@ export function ProductDetailModal({ offer, onClose }: Props) {
 
               {/* Details */}
               <div className="flex flex-col gap-5 min-w-0">
+                {/* Relevance signals */}
+                {ranked && (ranked.match_signals?.length || ranked.mismatch_signals?.length || ranked.selection_reasons?.length) ? (
+                  <section className="rounded-xl border border-[var(--color-line)] bg-[var(--color-surface-2)] p-3 flex flex-col gap-2 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-[var(--color-ink-2)]">Соответствие запросу</span>
+                      <span className="font-bold tabular-nums text-[var(--color-ink-2)]">{ranked.relevance_percent ?? Math.round((ranked.relevance_score ?? 0) * 100)}%</span>
+                    </div>
+                    {ranked.match_signals?.length ? (
+                      <div className="flex flex-wrap gap-1">
+                        {ranked.match_signals.map((s) => (
+                          <span key={s} className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200">
+                            ✓ {s}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                    {ranked.mismatch_signals?.length ? (
+                      <div className="flex flex-wrap gap-1">
+                        {ranked.mismatch_signals.map((s) => (
+                          <span key={s} className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full bg-red-50 text-red-700 border border-red-200">
+                            ✗ {s}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                    {ranked.selection_reasons?.length ? (
+                      <p className="text-[var(--color-ink-4)] leading-snug">{ranked.selection_reasons.join(" · ")}</p>
+                    ) : null}
+                  </section>
+                ) : null}
+
                 {/* Characteristics */}
                 <section>
                   <h3 className="text-sm font-semibold text-[var(--color-ink-2)] mb-2">

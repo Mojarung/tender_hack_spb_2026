@@ -96,13 +96,12 @@ class Settings(BaseSettings):
     # MinIO this way.
     image_cache_enabled: bool = True
 
-    # Local LLM via Ollama. Text fallback defaults to a small CPU-friendly model.
-    ollama_url: str = "http://ollama:11434"
-    # Direct Ollama Cloud API uses `https://ollama.com` + Bearer token.
-    # Local Ollama (`http://...:11434`) does not need a token.
-    ollama_api_key: str = ""
+    # LLM via Ollama Cloud — https://api.ollama.com with Bearer token.
+    # Override in .env for a local Ollama daemon (http://localhost:11434, empty key).
+    ollama_url: str = "https://api.ollama.com"
+    ollama_api_key: str = "1df4179033b74dc891fa7052ef51e756.mqtvDwOOAwdNMt-iBG2cnPxm"
     ollama_vision_model: str = "gemma4:e4b"
-    ollama_text_model: str = "qwen2.5:0.5b"
+    ollama_text_model: str = "gemma4:31b"
 
     # Optional semantic post-ranker. Deterministic attribute scoring remains
     # the primary ranker; reranker only reorders the top candidates.

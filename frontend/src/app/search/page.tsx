@@ -627,9 +627,9 @@ function SearchInner() {
         <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35 }}>
           <div className="flex items-start justify-between gap-4 flex-wrap">
             {(() => {
-              // Header query — prefer the corrected form once we have it,
-              // even mid-stream, so the user doesn't stare at their raw typo.
-              const displayedQuery = liveCorrection?.to ?? q;
+              // Always show the normalized (LLM-optimized) query once we have it.
+              // Falls back to raw user input only before query_normalized event arrives.
+              const displayedQuery = data?.query?.normalized || liveCorrection?.to || q;
               return <h1 className="text-2xl font-semibold tracking-tight">Результаты по «{displayedQuery}»</h1>;
             })()}
             <label className="text-xs text-[var(--color-ink-4)] flex items-center gap-2 mt-1.5">
@@ -661,17 +661,20 @@ function SearchInner() {
 
           {/* Correction notice — `from` is the URL-canonical form (after
               done), `liveCorrection` covers the in-flight stream window. */}
-          {(from || liveCorrection) && !nofix && (() => {
-            const fromText = from || liveCorrection?.from || "";
+          {!nofix && (() => {
+            const rawQuery = from || liveCorrection?.from || q;
+            const normalizedQuery = data?.query?.normalized || liveCorrection?.to || "";
+            const changed = normalizedQuery && normalizedQuery.toLowerCase() !== rawQuery.toLowerCase();
+            if (!changed) return null;
             return (
               <motion.p
                 initial={{ opacity: 0 }} animate={{ opacity: 1 }}
                 className="mt-2 text-xs text-[var(--color-ink-4)]"
               >
                 <CornerDownLeft className="inline w-3 h-3 mr-1 -mt-0.5" />
-                исправлено из «{fromText}» ·{" "}
+                исправлено из «{rawQuery}» ·{" "}
                 <Link
-                  href={`/search?q=${encodeURIComponent(fromText)}&nofix=1&region_id=${region.id}`}
+                  href={`/search?q=${encodeURIComponent(rawQuery)}&nofix=1&region_id=${region.id}`}
                   className="text-[var(--color-accent)] hover:underline"
                 >
                   искать как написал
@@ -693,6 +696,21 @@ function SearchInner() {
               </Link>
             </motion.p>
           )}
+          {!nofix && data?.query?.expansions?.length ? (
+            <motion.div
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+              className="mt-2 flex flex-wrap gap-1.5"
+            >
+              {data.query.expansions.map((exp, i) => (
+                <span
+                  key={i}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] bg-[var(--color-accent-50)] text-[var(--color-accent-2)] border border-[var(--color-accent-100)]/30"
+                >
+                  {exp}
+                </span>
+              ))}
+            </motion.div>
+          ) : null}
           {fromImage && (
             <motion.p
               initial={{ opacity: 0 }} animate={{ opacity: 1 }}

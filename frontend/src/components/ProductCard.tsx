@@ -165,6 +165,11 @@ export function ProductCard({ offer, index = 0, highlight, ranked }: Props) {
             {rel.label}
           </p>
         )}
+        {ranked?.mismatch_signals?.length ? (
+          <p className="text-[10px] leading-tight text-rose-500 truncate">
+            ✗ {ranked.mismatch_signals.slice(0, 2).join(", ")}
+          </p>
+        ) : null}
         {delivery && (
           <div className="mt-2 inline-flex items-center gap-1 text-[11px] text-[var(--color-ink-4)]">
             <Truck className="w-3 h-3" />
@@ -203,6 +208,7 @@ export function ProductCard({ offer, index = 0, highlight, ranked }: Props) {
       <ProductDetailModal
         offer={modalOpen ? offer : null}
         onClose={() => setModalOpen(false)}
+        ranked={modalOpen ? ranked : undefined}
       />
     </>
   );
