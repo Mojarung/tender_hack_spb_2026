@@ -206,6 +206,56 @@ def _brand_from(payload: dict[str, Any]) -> str:
     return ""
 
 
+def _chars_from_jsonld(payload: dict[str, Any]) -> dict[str, str]:
+    """Squeeze every safe attribute out of a Schema.org Product into a
+    flat characteristics dict. Strings only — the frontend facets the
+    dynamic ones automatically."""
+    out: dict[str, str] = {}
+    # Plain scalar fields most shops emit
+    for src_key, label in [
+        ("color", "Цвет"),
+        ("material", "Материал"),
+        ("model", "Модель"),
+        ("mpn", "Артикул"),
+        ("gtin", "Штрихкод"),
+        ("sku", "SKU"),
+        ("category", "Категория"),
+    ]:
+        v = payload.get(src_key)
+        if isinstance(v, str) and v.strip():
+            out[label] = v.strip()[:120]
+    # Dimensions / weight
+    if isinstance(payload.get("weight"), (str, int, float)):
+        out["Вес"] = str(payload["weight"])[:40]
+    # additionalProperty list — Schema.org's spec-table mechanism
+    extras = payload.get("additionalProperty")
+    if isinstance(extras, list):
+        for prop in extras[:30]:
+            if not isinstance(prop, dict):
+                continue
+            name = str(prop.get("name") or "").strip()
+            value = prop.get("value")
+            if isinstance(value, dict):
+                value = value.get("name") or value.get("value")
+            value = str(value or "").strip()
+            if name and value and name not in out:
+                out[name[:60]] = value[:120]
+    # Availability + condition
+    offers = payload.get("offers")
+    offer_block = offers if isinstance(offers, dict) else (
+        offers[0] if isinstance(offers, list) and offers and isinstance(offers[0], dict) else None
+    )
+    if isinstance(offer_block, dict):
+        avail = offer_block.get("availability")
+        if isinstance(avail, str):
+            # Strip the Schema.org namespace prefix
+            out["Наличие"] = avail.rsplit("/", 1)[-1]
+        cond = offer_block.get("itemCondition")
+        if isinstance(cond, str):
+            out["Состояние"] = cond.rsplit("/", 1)[-1]
+    return out
+
+
 def _to_offer(url: str, payload: dict[str, Any]) -> ProductOffer | None:
     name = payload.get("name")
     if not isinstance(name, str) or not name.strip():
@@ -213,6 +263,17 @@ def _to_offer(url: str, payload: dict[str, Any]) -> ProductOffer | None:
     price = _price_from(payload)
     if price is None or price < Decimal(100):
         return None
+    site = urlparse(url).netloc
+    chars: dict[str, str] = {"Магазин": site}
+    brand = _brand_from(payload)
+    if brand:
+        chars["Бренд"] = brand
+    chars.update(_chars_from_jsonld(payload))
+    # Description goes into chars (truncated) so the frontend modal can
+    # show it as a regular characteristic row.
+    desc = payload.get("description")
+    if isinstance(desc, str) and desc.strip():
+        chars["Описание"] = desc.strip()[:500]
     return ProductOffer(
         source=SourceKind.RUNET,
         name=name.strip(),
@@ -220,11 +281,8 @@ def _to_offer(url: str, payload: dict[str, Any]) -> ProductOffer | None:
         currency="RUB",
         url=url,
         image=_image_from(payload),
-        characteristics={
-            "site": urlparse(url).netloc,
-            "brand": _brand_from(payload),
-        },
-        seller=urlparse(url).netloc,
+        characteristics=chars,
+        seller=site,
         rating=None,
         fetched_at=datetime.now(tz=UTC),
         cached=False,

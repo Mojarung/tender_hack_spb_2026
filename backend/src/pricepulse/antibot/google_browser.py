@@ -112,23 +112,81 @@ EXTRACTOR_JS = r"""
       if (dataImg) image = dataImg.getAttribute('src');
     }
     // Extra metadata pulled from the same card text — feeds the dynamic
-    // facets on the frontend (UI lets the user filter by these).
+    // facets on the frontend (UI lets the user filter by these). The
+    // richer this map is, the more useful the sidebar becomes.
     const chars = {};
+
+    // Labels / state (from any text in the card)
     if (/НИЗКАЯ ЦЕНА/i.test(rawTxt)) chars["Метка"] = "Низкая цена";
-    if (/Б\/у/i.test(rawTxt)) chars["Состояние"] = "Б/у";
+    if (/Б\/у|восстановленный|refurbished/i.test(rawTxt + " " + title)) {
+      chars["Состояние"] = "Б/у";
+    } else {
+      chars["Состояние"] = "Новый";
+    }
+
+    // Pricing
     const original = rawTxt.match(/Обычно\s+(\d{1,3}(?:[ \s]\d{3})*)\s*₽/);
-    if (original) chars["Обычная цена"] = original[1].replace(/[\s ]/g, '') + " ₽";
+    if (original) {
+      const origNum = parseInt(original[1].replace(/[\s ]/g, ''), 10);
+      chars["Обычная цена"] = origNum.toLocaleString('ru-RU') + " ₽";
+      if (origNum > parseInt(price, 10)) {
+        const pct = Math.round(100 * (origNum - parseInt(price, 10)) / origNum);
+        chars["Скидка"] = "-" + pct + "%";
+      }
+    }
+
+    // Delivery / availability
     const delivery = rawTxt.match(/Возврат в течение[^\n]+/);
     if (delivery) chars["Доставка"] = delivery[0].slice(0, 60);
-    // Brand — first word of the title if it's a known maker
+    const freeDelivery = /бесплатн[аы]?я\s+доставк/i.test(rawTxt);
+    if (freeDelivery) chars["Бесплатная доставка"] = "да";
+    const stockMatch = rawTxt.match(/(в\s+наличии|нет\s+в\s+наличии|под\s+заказ)/i);
+    if (stockMatch) chars["Наличие"] = stockMatch[1];
+    const shopsCount = rawTxt.match(/(\d+)\s+магазин/i);
+    if (shopsCount) chars["Магазинов"] = shopsCount[1];
+
+    // Brand — known list against the title
     const BRANDS_RE = new RegExp(
       '\\b(Apple|Samsung|Xiaomi|Huawei|Sony|JBL|Marshall|Bose|LG|Asus|'
       + 'Lenovo|HP|Dell|Acer|MSI|Logitech|Razer|Beats|Sennheiser|AKG|'
       + 'Realme|Honor|Nothing|OPPO|Vivo|TCL|Philips|Bosch|Siemens|'
-      + 'Indesit|Электролюкс)\\b', 'i'
+      + 'Indesit|Электролюкс|Bork|Tefal|Polaris|Redmond|Kitfort|'
+      + 'Braun|Moulinex|Krups|De\\s?Longhi|Smeg|Garmin|Fitbit|Anker|'
+      + 'Baseus|Hoco|Belkin|Western\\s?Digital|Seagate|Kingston|'
+      + 'Sandisk|ADATA|Crucial|GIGABYTE|ASRock|Cooler\\s?Master|'
+      + 'NZXT|Corsair|Thermaltake|Gigabyte|Intel|AMD|NVIDIA|Microsoft|'
+      + 'Google|JBL|Sony|Pioneer|Yamaha)\\b', 'i',
     );
     const brandMatch = title.match(BRANDS_RE);
-    if (brandMatch) chars["Бренд"] = brandMatch[1];
+    if (brandMatch) chars["Бренд"] = brandMatch[0];
+
+    // Memory / storage — common phone/laptop SKU pattern (256ГБ, 1 ТБ, 16Gb)
+    const memMatch = title.match(/(\d{2,4})\s*(?:ГБ|GB|G\b)/i);
+    if (memMatch) chars["Память"] = memMatch[1] + " ГБ";
+    const tbMatch = title.match(/(\d(?:[.,]\d)?)\s*(?:ТБ|TB|T\b)/i);
+    if (tbMatch) chars["Память"] = tbMatch[1].replace(',', '.') + " ТБ";
+
+    // RAM — separate from storage (8/16/32 ГБ ОЗУ; 6/8/12 Gb RAM)
+    const ramMatch = title.match(/(\d{1,2})\s*(?:ГБ|GB)\s*(?:ОЗУ|RAM|оперативн)/i);
+    if (ramMatch) chars["ОЗУ"] = ramMatch[1] + " ГБ";
+
+    // Screen diagonal — "6,1\"", "13.3 дюйма", "55"
+    const screenMatch = title.match(/(\d{1,2}(?:[.,]\d)?)\s*(?:[''""″]|дюйм|inch|″)/i);
+    if (screenMatch) chars["Диагональ"] = screenMatch[1].replace(',', '.') + "''";
+
+    // Colour — простой словарь
+    const COLOR_RE = new RegExp(
+      '\\b(чёрн|черн|бел|сер|серебр|голуб|син|зелён|зелен|красн|'
+      + 'розов|жёлт|желт|оранжев|фиолетов|пурпурн|золот|graphite|'
+      + 'titanium|black|white|silver|blue|green|red|pink|yellow|'
+      + 'orange|purple|gold|natural|midnight|starlight)[а-яa-z]*\\b', 'i',
+    );
+    const colorMatch = (title + " " + rawTxt.split('\n').slice(0, 4).join(' ')).match(COLOR_RE);
+    if (colorMatch) chars["Цвет"] = colorMatch[0].toLowerCase();
+
+    // SIM type for phones (eSIM, nano-SIM, dual-SIM)
+    const simMatch = title.match(/\b(eSIM|nano[- ]?SIM|dual[- ]?SIM|SIM\+eSIM)\b/i);
+    if (simMatch) chars["SIM"] = simMatch[1];
 
     if (!price) continue;     // ProductOffer.price is required
     if (!seller) continue;    // no seller ⇒ likely an expanded-view dupe
