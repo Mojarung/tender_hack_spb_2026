@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator, metrics
 
 from pricepulse.antibot.browser_pool import close_browser_pool
+from pricepulse.antibot.google_browser import close_google_browser
 from pricepulse.antibot.wb_browser import close_wb_browser
 from pricepulse.antibot.yandex_browser import close_yandex_browser
 from pricepulse.api.cache import close_rate_limiter, close_search_cache
@@ -56,6 +57,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # "Failed to connect to browser". Pre-warming pays the launch cost
     # once at startup (~5-6 s combined) and eliminates the race.
     from pricepulse.antibot.browser_pool import get_browser_pool
+    from pricepulse.antibot.google_browser import get_google_browser
     from pricepulse.antibot.wb_browser import get_wb_browser
     from pricepulse.antibot.yandex_browser import get_yandex_browser
 
@@ -79,6 +81,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         import structlog
         structlog.get_logger(__name__).warning("yandex_browser_prewarm_failed", error=repr(exc), exc_info=True)
+    try:
+        google = await get_google_browser()
+        await google._ensure_started()    # type: ignore[attr-defined]
+    except Exception as exc:
+        import structlog
+        structlog.get_logger(__name__).warning("google_browser_prewarm_failed", error=repr(exc), exc_info=True)
 
     yield
     # Tear singletons down cleanly on app exit.
@@ -87,6 +95,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await close_browser_pool()
     await close_wb_browser()
     await close_yandex_browser()
+    await close_google_browser()
 
 
 def _instrument(app: FastAPI) -> None:

@@ -1,10 +1,11 @@
-export type Source = "wb" | "ozon" | "ya_market" | "runet";
+export type Source = "wb" | "ozon" | "ya_market" | "runet" | "google";
 
 export const SOURCE_LABEL: Record<Source, string> = {
   wb: "Wildberries",
   ozon: "Ozon",
   ya_market: "Я.Маркет",
   runet: "Рунет",
+  google: "Google",
 };
 
 export interface ProductReview {

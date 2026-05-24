@@ -6,3 +6,4 @@ class SourceKind(StrEnum):
     OZON = "ozon"
     YA_MARKET = "ya_market"
     RUNET = "runet"
+    GOOGLE = "google"

@@ -13,6 +13,6 @@ async def test_search_empty_groups(client: AsyncClient) -> None:
     )
     assert response.status_code == 200
     body = response.json()
-    # Orchestrator/search.py registry: WB + Ozon + Runet (Yandex SERP).
+    # Orchestrator/search.py registry: WB + Ozon + Runet + Google.
     # Я.Маркет still commented out — needs a residential RU proxy pool.
-    assert {g["source"] for g in body["groups"]} == {"wb", "ozon", "runet"}
+    assert {g["source"] for g in body["groups"]} == {"wb", "ozon", "runet", "google"}
