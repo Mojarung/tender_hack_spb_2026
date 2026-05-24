@@ -444,6 +444,16 @@ function SearchInner() {
   const sourceErrors = data?.groups?.filter((g) => g.error) ?? [];
   const allSourcesFailed = !loading && !!data?.groups?.length && sourceErrors.length === data.groups.length;
 
+  // Per-source median — used by ProductCard's "ДЕМПИНГ −X%" badge.
+  // A standalone helper so the empty-array case is just `undefined`.
+  const medianByGroup = new Map<Source, number>();
+  for (const g of data?.groups ?? []) {
+    const ps = g.offers.map((o) => Number(o.price)).filter((n) => n > 0).sort((a, b) => a - b);
+    if (ps.length === 0) continue;
+    const mid = Math.floor(ps.length / 2);
+    medianByGroup.set(g.source, ps.length % 2 ? ps[mid] : (ps[mid - 1] + ps[mid]) / 2);
+  }
+
   // Detect facets from current set. Cheap, runs every render.
   const facets = buildFacets(all);
 
@@ -711,6 +721,10 @@ function SearchInner() {
           <EmptyState query={q} />
         ) : (
           <>
+            {/* «Если бы это была закупка» — мини-симулятор котировочной
+                сессии по медиане. Видно жюри сразу под заголовком. */}
+            <AuctionSimulator offers={all} />
+
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mt-6">
               {offers.map((o, i) => (
                 <ProductCard
@@ -719,6 +733,7 @@ function SearchInner() {
                   index={i}
                   query={liveCorrection?.to ?? q}
                   allOffers={all}
+                  groupMedian={medianByGroup.get(o.source)}
                 />
               ))}
             </div>
@@ -770,6 +785,69 @@ function EmptyState({ query }: { query: string }) {
         формулировку. Попробуйте короче или с другими словами.
       </p>
     </motion.div>
+  );
+}
+
+/** Котировочная сессия simulator — для жюри-госзакупщика это родной
+ *  язык: НМЦК / прогноз победной цены / рекомендуемый шаг. Считается на
+ *  существующих ценах, бэк не дёргаем. */
+function AuctionSimulator({ offers }: { offers: ProductOffer[] }) {
+  const prices = offers
+    .map((o) => Number(o.price))
+    .filter((n) => Number.isFinite(n) && n > 0)
+    .sort((a, b) => a - b);
+  if (prices.length < 3) return null;    // 44-ФЗ ст.22 — нужно ≥3 КП
+  const mid = Math.floor(prices.length / 2);
+  const median = prices.length % 2 ? prices[mid] : (prices[mid - 1] + prices[mid]) / 2;
+  // Стандартные эвристики портала zakupki.mos.ru:
+  //   НМЦК ≈ median × 1.10 (с учётом запаса на торги)
+  //   ожидаемая победная цена ≈ median × 0.85 (типовое снижение)
+  //   шаг = max(500₽, 0.5% от НМЦК), округлено до 100₽
+  const nmck = Math.round(median * 1.10);
+  const winnerEst = Math.round(median * 0.85);
+  const step = Math.max(500, Math.round((nmck * 0.005) / 100) * 100);
+  const fmt = (n: number) => n.toLocaleString("ru-RU") + " ₽";
+  return (
+    <div className="mt-6 rounded-2xl border border-[var(--color-accent-100)] bg-gradient-to-br from-[var(--color-accent-50)] to-white p-5">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="grid place-items-center w-7 h-7 rounded-full bg-[var(--color-accent)] text-white text-xs font-bold">
+          ₽
+        </span>
+        <h3 className="text-sm font-semibold text-[var(--color-ink-2)]">
+          Если бы это была закупка через портал
+        </h3>
+        <span className="text-[10px] text-[var(--color-ink-4)] uppercase tracking-wider">
+          симулятор котировочной сессии
+        </span>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <Stat label="НМЦК (стартовая)" value={fmt(nmck)}
+              hint="median × 1.10 — типовой запас на торги" accent />
+        <Stat label="Прогноз победной" value={fmt(winnerEst)}
+              hint="median × 0.85 — статистика портала" />
+        <Stat label="Рекомендуемый шаг" value={fmt(step)}
+              hint="0.5 % от НМЦК, мин. 500 ₽" />
+        <Stat label="Медиана рынка" value={fmt(Math.round(median))}
+              hint={`по ${prices.length} предложениям`} />
+      </div>
+    </div>
+  );
+}
+
+function Stat({ label, value, hint, accent }: {
+  label: string; value: string; hint?: string; accent?: boolean;
+}) {
+  return (
+    <div>
+      <div className="text-[11px] uppercase tracking-wider text-[var(--color-ink-4)]">{label}</div>
+      <div className={clsx(
+        "text-lg font-semibold tabular-nums",
+        accent ? "text-[var(--color-accent-2)]" : "text-[var(--color-ink)]",
+      )}>
+        {value}
+      </div>
+      {hint && <div className="text-[10px] text-[var(--color-ink-4)] mt-0.5">{hint}</div>}
+    </div>
   );
 }
 

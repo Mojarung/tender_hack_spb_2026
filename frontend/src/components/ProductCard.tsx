@@ -24,9 +24,13 @@ interface Props {
   highlight?: boolean;   // best deal accent
   query?: string;        // forwarded to the AI explainer
   allOffers?: ProductOffer[];   // forwarded to the AI explainer for context
+  /** Median price within the same SourceGroup — used to flag offers
+   *  that fall ≥25 % below as «ДЕМПИНГ» per 44-ФЗ ст.37 (the buyer
+   *  must request extra performance bond from such a supplier). */
+  groupMedian?: number;
 }
 
-export function ProductCard({ offer, index = 0, highlight, query, allOffers }: Props) {
+export function ProductCard({ offer, index = 0, highlight, query, allOffers, groupMedian }: Props) {
   const [fav, setFav] = useState(false);
   const [busy, setBusy] = useState(false);
   const [imgFailed, setImgFailed] = useState(false);
@@ -82,9 +86,29 @@ export function ProductCard({ offer, index = 0, highlight, query, allOffers }: P
       >
         {/* Source + favorite */}
         <div className="flex items-center justify-between">
-          <div className="chip">
-            <span className={clsx("source-dot", sourceClass[offer.source])} />
-            {SOURCE_LABEL[offer.source]}
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <div className="chip">
+              <span className={clsx("source-dot", sourceClass[offer.source])} />
+              {SOURCE_LABEL[offer.source]}
+            </div>
+            {/* «ДЕМПИНГ −X%» — when price drops ≥25 % below the source
+                median. Triggers anti-dumping clause (44-ФЗ ст.37) —
+                the buyer must request 1.5× performance bond from such
+                a supplier. Hover for the explanation. */}
+            {(() => {
+              const price = Number(offer.price);
+              if (!groupMedian || !(price > 0)) return null;
+              const dropPct = Math.round(((groupMedian - price) / groupMedian) * 100);
+              if (dropPct < 25) return null;
+              return (
+                <span
+                  title={`Цена ниже медианы ${Math.round(groupMedian).toLocaleString("ru-RU")} ₽ на ${dropPct}% — по 44-ФЗ ст.37 потребуется повышенное (1.5×) обеспечение контракта`}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-50 text-red-700 border border-red-200"
+                >
+                  ⚠ ДЕМПИНГ −{dropPct}%
+                </span>
+              );
+            })()}
           </div>
           <button
             type="button"
