@@ -1,0 +1,4 @@
+.venv/
+.profile_google/
+_out/*
+!_out/.gitkeep
