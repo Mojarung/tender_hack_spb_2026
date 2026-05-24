@@ -325,6 +325,67 @@ async def _fetch_jsonld_offer(
     return None
 
 
+# Brand-name → canonical Russian shop domain. Google Shopping shows seller
+# as either an already-domain ("biggeek.ru") or a brand name ("Эльдорадо").
+# We map the brands back to their domain so the offer URL lands on the
+# merchant's homepage instead of Google's search results (much better UX
+# even when /api/v1/runet/resolve fails to harvest the real product URL).
+_SHOP_DOMAIN_MAP: dict[str, str] = {
+    "эльдорадо":        "eldorado.ru",
+    "м.видео":          "mvideo.ru",
+    "мвидео":           "mvideo.ru",
+    "ситилинк":         "citilink.ru",
+    "ситилинк.ру":      "citilink.ru",
+    "dns":              "dns-shop.ru",
+    "днс":              "dns-shop.ru",
+    "связной":          "svyaznoy.ru",
+    "мтс":              "mts.ru",
+    "билайн":           "shop.beeline.ru",
+    "мегафон":          "megafon.ru",
+    "ростелеком":       "shop.rt.ru",
+    "озон":             "ozon.ru",
+    "ozon":             "ozon.ru",
+    "wildberries":      "wildberries.ru",
+    "вайлдберриз":      "wildberries.ru",
+    "яндекс маркет":    "market.yandex.ru",
+    "yandex market":    "market.yandex.ru",
+    "apple store":      "re-store.ru",
+    "apple-market":     "apple-market.ru",
+    "фонмарт":          "fonmart.ru",
+    "техносила":        "technosila.ru",
+    "холодильник.ру":   "holodilnik.ru",
+    "holodilnik":       "holodilnik.ru",
+    "ноу-хау":          "nbcom.ru",
+    "юлмарт":           "ulmart.ru",
+    "сбермегамаркет":   "megamarket.ru",
+    "мегамаркет":       "megamarket.ru",
+    "ашан":             "auchan.ru",
+    "лента":            "lenta.com",
+    "перекресток":      "perekrestok.ru",
+    "пятёрочка":        "5ka.ru",
+}
+
+
+def _seller_to_url(seller: str | None) -> str | None:
+    """Best-effort merchant URL from the seller string. Returns the canonical
+    domain when we recognise the shop, else `https://<seller>` if it already
+    looks like a domain, else None."""
+    if not seller:
+        return None
+    s = seller.strip().lower()
+    # Known-brand mapping
+    if s in _SHOP_DOMAIN_MAP:
+        return f"https://{_SHOP_DOMAIN_MAP[s]}"
+    for k, dom in _SHOP_DOMAIN_MAP.items():
+        if k in s:
+            return f"https://{dom}"
+    # Already a domain?
+    cleaned = seller.strip().lstrip("@")
+    if re.match(r"^[a-z0-9][a-z0-9\-]+(\.[a-z]{2,})+$", cleaned, re.IGNORECASE):
+        return f"https://{cleaned}"
+    return None
+
+
 def _google_stub_to_offer(stub: dict[str, Any], query_for_fallback: str) -> ProductOffer | None:
     """Build a ProductOffer straight from a Google Shopping card.
 
@@ -366,9 +427,11 @@ def _google_stub_to_offer(stub: dict[str, Any], query_for_fallback: str) -> Prod
         for k, v in extra.items():
             if isinstance(v, str) and v:
                 chars[str(k)] = v
-    # Google merchant URL is hidden; we link into a Google Shopping search
-    # so the user lands on the same card and clicks through manually.
-    url = (
+    # Prefer the merchant homepage when we can derive it from the seller
+    # string — that's a far better landing than the Google Shopping search.
+    # Falls back to the Google Shopping deep-link if seller maps to nothing
+    # we recognise (then the /api/v1/runet/resolve dance kicks in on click).
+    url = _seller_to_url(seller) or (
         "https://www.google.com/search?tbm=shop&hl=ru&gl=ru&q="
         + quote_plus(f"{title} {seller or ''} купить".strip())
     )
