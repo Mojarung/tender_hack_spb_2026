@@ -2,7 +2,7 @@
 
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowUpRight, ChevronLeft, ChevronRight, Sparkles, Star, X } from "lucide-react";
+import { ArrowUpRight, ChevronLeft, ChevronRight, Sparkles, Star, ThumbsDown, ThumbsUp, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -176,6 +176,100 @@ function AIExplainer({
         </div>
       )}
     </section>
+  );
+}
+
+
+/** Gemma-extracted pros/cons chips with a sentiment-score gauge. Fires
+ *  one POST /api/v1/aspects per (offer, review_count) — cached server-side
+ *  for 24 h so re-opening the modal is instant. Renders nothing while
+ *  loading and silently skips when the model returns no aspects (very
+ *  short / sparse reviews — chips would be invented noise). */
+function AspectChips({ offer }: { offer: ProductOffer }) {
+  type Aspect = { label: string; mentions: number };
+  const [data, setData] = useState<{ pros: Aspect[]; cons: Aspect[]; score: number } | null>(null);
+  const [busy, setBusy] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    const texts = (offer.reviews ?? [])
+      .map((r) => (r.text || "").trim())
+      .filter((t) => t.length >= 20);
+    if (texts.length < 3) { setBusy(false); return; }
+    setBusy(true);
+    (async () => {
+      try {
+        const res = await api.aspects(offer.url, texts);
+        if (!cancelled) setData(res);
+      } catch {
+        if (!cancelled) setData(null);
+      } finally {
+        if (!cancelled) setBusy(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [offer.url, offer.reviews]);
+
+  if (busy) {
+    return (
+      <div className="mb-3 text-xs text-[var(--color-ink-4)] italic">
+        Локальная модель анализирует отзывы…
+      </div>
+    );
+  }
+  if (!data || (data.pros.length === 0 && data.cons.length === 0)) return null;
+
+  const scoreColor =
+    data.score >= 70 ? "var(--color-good)"
+    : data.score >= 45 ? "var(--color-warn)"
+    : "var(--color-bad)";
+
+  return (
+    <div className="mb-3 p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)]">
+      <div className="flex items-center justify-between mb-2 gap-3">
+        <span className="text-xs font-medium text-[var(--color-ink-3)] inline-flex items-center gap-1.5">
+          <Sparkles className="w-3 h-3" />
+          AI-разбор отзывов
+        </span>
+        <span
+          className="text-xs font-semibold tabular-nums px-2 py-0.5 rounded-full"
+          style={{ color: scoreColor, background: `color-mix(in srgb, ${scoreColor} 12%, transparent)` }}
+          title="Сводный индекс позитива от 0 до 100"
+        >
+          {data.score}/100
+        </span>
+      </div>
+      {data.pros.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mb-1.5">
+          {data.pros.map((a) => (
+            <span
+              key={`p-${a.label}`}
+              className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-[color-mix(in_srgb,var(--color-good)_14%,transparent)] text-[var(--color-good)]"
+              title={a.mentions > 0 ? `Упомянуто ~${a.mentions}× в отзывах` : undefined}
+            >
+              <ThumbsUp className="w-3 h-3" />
+              {a.label}
+              {a.mentions > 0 && <span className="opacity-70 tabular-nums">{a.mentions}</span>}
+            </span>
+          ))}
+        </div>
+      )}
+      {data.cons.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {data.cons.map((a) => (
+            <span
+              key={`c-${a.label}`}
+              className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-[color-mix(in_srgb,var(--color-bad)_14%,transparent)] text-[var(--color-bad)]"
+              title={a.mentions > 0 ? `Упомянуто ~${a.mentions}× в отзывах` : undefined}
+            >
+              <ThumbsDown className="w-3 h-3" />
+              {a.label}
+              {a.mentions > 0 && <span className="opacity-70 tabular-nums">{a.mentions}</span>}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -476,6 +570,7 @@ export function ProductDetailModal({ offer, onClose, query, allOffers }: Props) 
                       </select>
                     )}
                   </div>
+                  {reviews.length > 0 && <AspectChips offer={offer} />}
                   {reviews.length > 0 ? (
                     <ul className="flex flex-col gap-3 max-h-[420px] overflow-y-auto pr-1">
                       {sortedReviews.map((r, i) => (

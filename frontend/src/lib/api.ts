@@ -276,6 +276,21 @@ export const api = {
     return { close: () => ctrl.abort() };
   },
 
+  /** LLM aspect extraction from product reviews — returns pros/cons chips
+   *  + an overall sentiment score (0..100). Cached server-side for 24 h
+   *  per (offer_url, review_count). Use only when there are ≥3 reviews
+   *  with real text — otherwise the model invents aspects. */
+  aspects: (offer_url: string, reviews: string[]) =>
+    http<{
+      pros: { label: string; mentions: number }[];
+      cons: { label: string; mentions: number }[];
+      score: number;
+      n_reviews_used: number;
+    }>("/api/v1/aspects", {
+      method: "POST",
+      body: JSON.stringify({ offer_url, reviews }),
+    }),
+
   /** Run a search and download the result as a 44-ФЗ Приложение №1 Excel.
    *  Backend re-fetches via the orchestrator (uses cache), assembles the
    *  workbook, returns it as a blob. We trigger the browser download here. */
