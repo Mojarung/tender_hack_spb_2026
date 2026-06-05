@@ -1,7 +1,0 @@
-# Per-experiment uv venvs and caches — never commit
-.venv/
-__pycache__/
-*.pyc
-
-# Runtime artifacts могут быть полезны для воспроизводимости,
-# поэтому _out/ оставляем под git (если станет тяжёлым — почистить).
